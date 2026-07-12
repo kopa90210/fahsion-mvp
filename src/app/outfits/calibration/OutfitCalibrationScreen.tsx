@@ -1,9 +1,10 @@
 'use client'
 
-import { useMemo, useState, useTransition } from 'react'
+import { useMemo, useRef, useState, useTransition } from 'react'
 import Image from 'next/image'
+import { useRouter } from 'next/navigation'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ChevronDown, Heart, ThumbsDown } from 'lucide-react'
+import { Heart, ThumbsDown } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,8 +14,10 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import type { DailyOutfit } from '@/src/app/actions/outfit'
-import { submitOutfitFeedback, getDailyOutfit } from '@/src/app/actions/outfit'
+import {
+  submitCalibrationFeedback,
+  type CalibrationOutfit,
+} from '@/src/app/actions/outfit'
 import type { StyleVector } from '@/src/lib/quiz/scoring'
 
 const TAG_LABELS: Record<string, string> = {
@@ -30,7 +33,7 @@ function formatRole(role: string) {
   return role.replaceAll('_', ' ')
 }
 
-function getChangedTags(outfit: DailyOutfit) {
+function getChangedTags(outfit: CalibrationOutfit) {
   return Array.from(
     new Set(
       outfit.items.flatMap((item) =>
@@ -60,17 +63,22 @@ function getOptimisticVector(
   return nextVector
 }
 
-export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
-  const [currentOutfit, setCurrentOutfit] = useState(outfit)
-  const [viewState, setViewState] = useState<'outfit' | 'loading' | 'done'>('outfit')
-  const [selectedFeedback, setSelectedFeedback] = useState<boolean | null>(null)
-  const [vector, setVector] = useState(outfit.vector)
-  const [pendingMessage, setPendingMessage] = useState<string | null>(null)
+export default function OutfitCalibrationScreen({
+  outfits,
+}: {
+  outfits: CalibrationOutfit[]
+}) {
+  const router = useRouter()
+  const [currentIndex, setCurrentIndex] = useState(0)
+  const [visible, setVisible] = useState(true)
+  const [lastFeedback, setLastFeedback] = useState<boolean | null>(null)
+  const [vector, setVector] = useState(outfits[0].vector)
+  const [isFinishing, setIsFinishing] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [whyOpen, setWhyOpen] = useState(false)
   const [, startTransition] = useTransition()
+  const feedbackQueue = useRef<Promise<unknown>>(Promise.resolve())
 
-  const changedTags = useMemo(() => getChangedTags(currentOutfit), [currentOutfit])
+  const outfit = outfits[currentIndex]
   const topVectorEntries = useMemo(
     () =>
       Object.entries(vector)
@@ -80,51 +88,55 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
   )
 
   function handleFeedback(liked: boolean) {
-    if (selectedFeedback !== null) return
+    if (!visible || isFinishing) return
 
-    setSelectedFeedback(liked)
+    const activeOutfit = outfit
+    const activeIndex = currentIndex
+    const isFinalOutfit = activeIndex === outfits.length - 1
+    const changedTags = getChangedTags(activeOutfit)
+
+    setLastFeedback(liked)
     setErrorMessage(null)
+    setVisible(false)
     setVector((current) => getOptimisticVector(current, changedTags, liked))
 
-    if (liked) {
-      setViewState('done')
-      setPendingMessage('Updating your style DNA...')
-    } else {
-      setViewState('loading')
-    }
+    const feedbackPromise = feedbackQueue.current.then(() =>
+      submitCalibrationFeedback(
+        activeOutfit.id,
+        liked,
+        activeOutfit.items,
+        isFinalOutfit,
+      ),
+    )
 
-    startTransition(async () => {
-      try {
-        const result = await submitOutfitFeedback(currentOutfit.id, liked, currentOutfit.items)
-        setVector(result.vector)
-        
-        if (liked) {
-          setPendingMessage('Style DNA updated.')
-        } else {
-          const nextOutfit = await getDailyOutfit()
-          if (nextOutfit) {
-            setCurrentOutfit(nextOutfit)
-            setSelectedFeedback(null)
-            setWhyOpen(false)
-            setViewState('outfit')
-          } else {
-            setViewState('done')
-            setPendingMessage('No more outfits available today.')
-          }
-        }
-      } catch (error) {
-        setErrorMessage(
-          error instanceof Error
-            ? error.message
-            : 'Feedback saved locally, but the style update failed.',
-        )
-        setPendingMessage(null)
-        if (!liked) {
-          setViewState('outfit')
-          setSelectedFeedback(null)
-        }
+    feedbackQueue.current = feedbackPromise.catch(() => undefined)
+
+    window.setTimeout(() => {
+      if (!isFinalOutfit) {
+        setCurrentIndex(activeIndex + 1)
+        setLastFeedback(null)
+        setVisible(true)
+        return
       }
-    })
+
+      setIsFinishing(true)
+      startTransition(async () => {
+        try {
+          const result = await feedbackPromise
+          setVector(result.vector)
+          router.replace('/outfits')
+          router.refresh()
+        } catch (error) {
+          setIsFinishing(false)
+          setVisible(true)
+          setErrorMessage(
+            error instanceof Error
+              ? error.message
+              : 'Calibration could not be saved. Try that last response again.',
+          )
+        }
+      })
+    }, 300)
   }
 
   return (
@@ -134,36 +146,36 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
           <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="text-sm font-medium uppercase tracking-[0.18em] text-[#7a6f62]">
-                Today&apos;s outfit
+                Outfit calibration
               </p>
               <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
-                One look for today
+                Tune your first looks
               </h1>
             </div>
             <Badge variant="outline" className="border-[#b9aa99] bg-white/45 text-[#4f463d]">
-              Recommended from your wardrobe
+              {Math.min(currentIndex + 1, outfits.length)} of {outfits.length}
             </Badge>
           </div>
 
           <AnimatePresence mode="wait">
-            {viewState === 'outfit' ? (
+            {visible && !isFinishing ? (
               <motion.div
-                key={currentOutfit.id}
+                key={outfit.id}
                 initial={{ opacity: 0, y: 18 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, x: selectedFeedback ? 52 : -52, scale: 0.98 }}
+                exit={{ opacity: 0, x: lastFeedback ? 52 : -52, scale: 0.98 }}
                 transition={{ duration: 0.3, ease: 'easeOut' }}
               >
                 <Card className="rounded-lg border-[#d8cec2] bg-white/70 shadow-sm">
                   <CardHeader className="gap-2">
-                    <CardTitle className="text-xl">Wear this combination</CardTitle>
+                    <CardTitle className="text-xl">Would you wear this?</CardTitle>
                     <CardDescription>
-                      Built from pieces you already selected, with the strongest style match first.
+                      React to three generated outfits before your first daily recommendation.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">
                     <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
-                      {currentOutfit.items.map((item, index) => (
+                      {outfit.items.map((item, index) => (
                         <motion.div
                           key={item.id}
                           initial={{ opacity: 0, y: 12 }}
@@ -200,80 +212,36 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#e4dbd0] pt-4">
-                      <button
-                        type="button"
-                        onClick={() => setWhyOpen((open) => !open)}
-                        className="inline-flex items-center gap-1.5 text-sm font-medium text-[#574d43] transition hover:text-[#1d1b18]"
-                        aria-expanded={whyOpen}
-                      >
-                        Why this
-                        <ChevronDown
-                          className={`size-4 transition ${whyOpen ? 'rotate-180' : ''}`}
-                          aria-hidden="true"
-                        />
-                      </button>
+                      <p className="text-sm leading-6 text-[#6d6257]">
+                        Your response updates Fashion DNA immediately.
+                      </p>
 
                       <div className="flex items-center gap-2">
                         <Button
                           type="button"
                           variant="outline"
                           size="icon-lg"
-                          aria-label="Dislike this outfit"
+                          aria-label="Dislike this calibration outfit"
                           onClick={() => handleFeedback(false)}
-                          disabled={selectedFeedback !== null}
                         >
                           <ThumbsDown className="size-4" />
                         </Button>
                         <Button
                           type="button"
                           size="icon-lg"
-                          aria-label="Like this outfit"
+                          aria-label="Like this calibration outfit"
                           onClick={() => handleFeedback(true)}
-                          disabled={selectedFeedback !== null}
                         >
                           <Heart className="size-4" />
                         </Button>
                       </div>
                     </div>
-
-                    <AnimatePresence initial={false}>
-                      {whyOpen && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="overflow-hidden"
-                        >
-                          <div className="rounded-lg border border-[#e2d8cc] bg-[#faf7f2] p-4 text-sm leading-6 text-[#5d5349]">
-                            {currentOutfit.reasons.length > 0
-                              ? currentOutfit.reasons.join(', ')
-                              : 'because these pieces line up with the preferences you saved earlier'}
-                            .
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
                   </CardContent>
                 </Card>
               </motion.div>
-            ) : viewState === 'loading' ? (
-              <motion.div
-                key="loading"
-                initial={{ opacity: 0, scale: 0.98 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.98 }}
-                transition={{ duration: 0.2 }}
-                className="flex min-h-[520px] items-center justify-center rounded-lg border border-[#d8cec2] bg-white/65 shadow-sm"
-              >
-                <div className="flex flex-col items-center gap-3 text-[#7a6f62]">
-                  <div className="size-6 animate-spin rounded-full border-2 border-[#d8cec2] border-t-[#7a6f62]" />
-                  <p className="text-sm font-medium">Finding another outfit...</p>
-                </div>
-              </motion.div>
             ) : (
               <motion.div
-                key="tomorrow"
+                key="finishing"
                 initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.28, ease: 'easeOut' }}
@@ -281,17 +249,14 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
               >
                 <div className="max-w-md">
                   <p className="text-sm font-medium uppercase tracking-[0.18em] text-[#7a6f62]">
-                    Thanks
+                    Calibrating
                   </p>
                   <h2 className="mt-3 text-2xl font-semibold tracking-tight">
-                    Tomorrow&apos;s outfit will use what you just told me.
+                    Preparing your first daily outfit.
                   </h2>
                   <p className="mt-3 text-sm leading-6 text-[#6d6257]">
-                    Come back tomorrow for one fresh look, tuned a little more to your taste.
+                    Your three reactions are being folded into Fashion DNA now.
                   </p>
-                  {pendingMessage && (
-                    <p className="mt-5 text-sm font-medium text-[#4f463d]">{pendingMessage}</p>
-                  )}
                   {errorMessage && (
                     <p className="mt-5 text-sm font-medium text-red-700">{errorMessage}</p>
                   )}
@@ -305,7 +270,7 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
           <Card className="rounded-lg border-[#d8cec2] bg-white/70 shadow-sm">
             <CardHeader>
               <CardTitle>Fashion DNA</CardTitle>
-              <CardDescription>Visible preference weights after this response.</CardDescription>
+              <CardDescription>Visible preference weights after each response.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {topVectorEntries.map(([tag, weight]) => (

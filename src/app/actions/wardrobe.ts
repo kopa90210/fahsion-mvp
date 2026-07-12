@@ -9,6 +9,43 @@ export type CuratedItem = {
   display_name: string
 }
 
+const CATEGORY_ORDER = ['top', 'bottom', 'footwear', 'outerwear', 'accessory'] as const
+
+function mapWardrobeCategory(item: {
+  category: string | null
+  subcategory?: string | null
+  display_name?: string | null
+  layer_role?: string | null
+}) {
+  const text = [
+    item.category,
+    item.subcategory,
+    item.display_name,
+    item.layer_role,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+
+  if (text.includes('shoe') || text.includes('footwear') || text.includes('sneaker') || text.includes('boot') || text.includes('loafer')) {
+    return 'footwear'
+  }
+
+  if (text.includes('outerwear') || text.includes('outer wear') || text.includes('outer_layer') || text.includes('outer layer') || text.includes('jacket') || text.includes('coat') || text.includes('blazer')) {
+    return 'outerwear'
+  }
+
+  if (text.includes('bottom') || text.includes('pant') || text.includes('trouser') || text.includes('skirt') || text.includes('jean') || text.includes('short')) {
+    return 'bottom'
+  }
+
+  if (text.includes('top') || text.includes('shirt') || text.includes('blouse') || text.includes('tee') || text.includes('sweater')) {
+    return 'top'
+  }
+
+  return 'accessory'
+}
+
 export async function getCuratedPieces(): Promise<Record<string, CuratedItem[]>> {
   const supabase = await createClient()
 
@@ -34,7 +71,7 @@ export async function getCuratedPieces(): Promise<Record<string, CuratedItem[]>>
   // 2. Fetch all wardrobe items
   const { data: items, error: itemsError } = await supabase
     .from('wardrobe_items')
-    .select('id, category, image_url, display_name, style_tags')
+    .select('id, category, subcategory, image_url, display_name, layer_role, style_tags')
 
   if (itemsError || !items) {
     console.error('Error fetching wardrobe items:', itemsError)
@@ -56,30 +93,24 @@ export async function getCuratedPieces(): Promise<Record<string, CuratedItem[]>>
     return {
       id: item.id,
       category: item.category,
+      subcategory: item.subcategory,
       image_url: item.image_url,
       display_name: item.display_name,
+      layer_role: item.layer_role,
       score,
     }
   })
 
   // 4. Group by category and take top 10
-  const grouped: Record<string, CuratedItem[]> = {
-    top: [],
-    bottom: [],
-    footwear: [],
-    accessory: [],
-  }
+  const grouped: Record<string, CuratedItem[]> = Object.fromEntries(
+    CATEGORY_ORDER.map((category) => [category, []]),
+  )
 
   // Sort globally first, then push to categories to keep highest scored first
   scoredItems.sort((a, b) => b.score - a.score)
 
   for (const item of scoredItems) {
-    const cat = item.category.toLowerCase()
-    let mappedCat = cat
-    if (cat.includes('top') || cat.includes('shirt') || cat.includes('jacket') || cat.includes('sweater')) mappedCat = 'top'
-    else if (cat.includes('bottom') || cat.includes('pant') || cat.includes('skirt') || cat.includes('jeans')) mappedCat = 'bottom'
-    else if (cat.includes('shoe') || cat.includes('footwear') || cat.includes('sneaker') || cat.includes('boot')) mappedCat = 'footwear'
-    else mappedCat = 'accessory'
+    const mappedCat = mapWardrobeCategory(item)
 
     if (!grouped[mappedCat]) {
       grouped[mappedCat] = []

@@ -1,4 +1,5 @@
 import { signup } from '../actions'
+import Link from 'next/link'
 
 export default async function SignupPage(props: {
   searchParams: Promise<{ error: string }>
@@ -59,6 +60,12 @@ export default async function SignupPage(props: {
               </p>
             )}
           </form>
+          <div className="mt-4 text-center text-sm">
+            Already have an account?{' '}
+            <Link href="/login" className="underline">
+              Log in
+            </Link>
+          </div>
         </div>
       </div>
     </div>

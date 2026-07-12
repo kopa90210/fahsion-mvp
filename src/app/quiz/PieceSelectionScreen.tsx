@@ -79,6 +79,8 @@ export default function PieceSelectionScreen({
                   src={item.image_url}
                   alt={item.display_name}
                   fill
+                  sizes="80px"
+                  unoptimized
                   className="object-cover"
                 />
               ) : (
@@ -137,6 +139,8 @@ export default function PieceSelectionScreen({
                             src={item.image_url}
                             alt={item.display_name}
                             fill
+                            sizes="(min-width: 1024px) 20vw, (min-width: 768px) 25vw, (min-width: 640px) 33vw, 50vw"
+                            unoptimized
                             className="object-cover"
                           />
                         ) : (

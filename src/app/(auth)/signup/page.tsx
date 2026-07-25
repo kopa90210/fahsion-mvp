@@ -1,5 +1,7 @@
 import { signup } from '../actions'
 import Link from 'next/link'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 
 export default async function SignupPage(props: {
   searchParams: Promise<{ error: string }>
@@ -23,7 +25,7 @@ export default async function SignupPage(props: {
                 <label className="sr-only" htmlFor="email">
                   Email
                 </label>
-                <input
+                <Input
                   id="email"
                   name="email"
                   placeholder="name@example.com"
@@ -31,7 +33,6 @@ export default async function SignupPage(props: {
                   autoCapitalize="none"
                   autoComplete="email"
                   autoCorrect="off"
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   required
                 />
               </div>
@@ -39,20 +40,16 @@ export default async function SignupPage(props: {
                 <label className="sr-only" htmlFor="password">
                   Password
                 </label>
-                <input
+                <Input
                   id="password"
                   name="password"
                   type="password"
-                  className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                   required
                 />
               </div>
-              <button
-                type="submit"
-                className="inline-flex items-center justify-center whitespace-nowrap rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 bg-primary text-primary-foreground shadow hover:bg-primary/90 h-9 px-4 py-2"
-              >
+              <Button type="submit" className="w-full">
                 Sign Up
-              </button>
+              </Button>
             </div>
             {searchParams?.error && (
               <p className="mt-4 p-4 bg-red-500/10 text-red-500 text-center text-sm rounded-md">

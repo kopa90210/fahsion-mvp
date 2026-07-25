@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { getDailyOutfit, shouldShowOutfitCalibration } from '@/src/app/actions/outfit'
+import { getFashionDnaSummary } from '@/src/app/actions/fashion-dna'
 import DailyOutfitScreen from './DailyOutfitScreen'
 import { buttonVariants } from '@/components/ui/button'
 
@@ -24,7 +25,7 @@ export default async function OutfitsPage() {
           <p className="mt-3 text-sm leading-6 text-[#6d6257]">
             I need at least a top, bottom, and footwear before I can build a useful look.
           </p>
-          <Link href="/quiz" className={buttonVariants({ className: 'mt-6' })}>
+          <Link href="/quiz?done=true" className={buttonVariants({ className: 'mt-6' })}>
             Choose wardrobe pieces
           </Link>
         </div>
@@ -32,5 +33,13 @@ export default async function OutfitsPage() {
     )
   }
 
-  return <DailyOutfitScreen outfit={outfit} />
+  const { signals, feedbackCount } = await getFashionDnaSummary()
+
+  return (
+    <DailyOutfitScreen
+      outfit={outfit}
+      initialSignals={signals}
+      feedbackCount={feedbackCount}
+    />
+  )
 }

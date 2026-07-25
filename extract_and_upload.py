@@ -1,4 +1,5 @@
 import argparse
+from difflib import SequenceMatcher
 import hashlib
 import json
 import mimetypes
@@ -17,7 +18,7 @@ from supabase import create_client
 
 BUCKET_NAME = "wardrobe-images"
 MIGRATION_PATH = "supabase/migrations/0002_wardrobe_extraction_pipeline.sql"
-DEFAULT_GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+DEFAULT_GROQ_MODEL = "qwen/qwen3.6-27b"
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 FORBIDDEN_KEYS = {
     "brand",
@@ -98,6 +99,11 @@ def parse_args() -> argparse.Namespace:
         "--force-duplicates",
         action="store_true",
         help="Process photos even when their hash already has an accepted log entry.",
+    )
+    parser.add_argument(
+        "--allow-duplicates",
+        action="store_true",
+        help="Bypass duplicate display_name check when processing items.",
     )
     return parser.parse_args()
 
@@ -380,6 +386,39 @@ def insert_wardrobe_item(
     supabase.table("wardrobe_items").insert(row).execute()
 
 
+def find_duplicate_display_name(
+    supabase: Any,
+    category: str,
+    new_display_name: str,
+    threshold: float = 0.85,
+) -> tuple[str | None, float]:
+    if not new_display_name or not category:
+        return None, 0.0
+
+    try:
+        response = (
+            supabase.table("wardrobe_items")
+            .select("display_name")
+            .eq("category", category)
+            .execute()
+        )
+        rows = response.data or []
+    except Exception:
+        return None, 0.0
+
+    new_name_clean = new_display_name.strip().lower()
+    for row in rows:
+        existing_name = row.get("display_name")
+        if not existing_name:
+            continue
+        existing_name_clean = existing_name.strip().lower()
+        ratio = SequenceMatcher(None, new_name_clean, existing_name_clean).ratio()
+        if ratio > threshold:
+            return existing_name, ratio
+
+    return None, 0.0
+
+
 def process_photo(
     supabase: Any,
     client: Groq,
@@ -387,6 +426,7 @@ def process_photo(
     min_confidence: float,
     model: str,
     force_duplicates: bool,
+    allow_duplicates: bool = False,
 ) -> str:
     digest = photo_hash(photo)
     previous_counts = existing_hash_status_counts(supabase, digest)
@@ -429,6 +469,24 @@ def process_photo(
         print(f"{photo.name} -> rejected ({'; '.join(problems)})")
         return "rejected"
 
+    category = attributes.get("category", "")
+    display_name = attributes.get("display_name", "")
+    duplicate_name, similarity = find_duplicate_display_name(
+        supabase, category, display_name
+    )
+    if duplicate_name:
+        problem_msg = f"possible duplicate of {duplicate_name}"
+        print(
+            f"{photo.name} -> warning: possible duplicate of '{duplicate_name}' "
+            f"(similarity: {similarity:.2f})"
+        )
+        if not allow_duplicates:
+            log_extraction(
+                supabase, photo, digest, raw_attributes, "rejected", [problem_msg]
+            )
+            print(f"{photo.name} -> rejected ({problem_msg})")
+            return "rejected"
+
     item_id = str(uuid4())
     image_url = upload_photo(supabase, photo, item_id)
     insert_wardrobe_item(supabase, item_id, image_url, attributes)
@@ -465,6 +523,7 @@ def main() -> int:
                 args.min_confidence,
                 args.model,
                 args.force_duplicates,
+                args.allow_duplicates,
             )
             if status == "accepted":
                 accepted += 1

@@ -18,6 +18,7 @@ export type DailyOutfit = Outfit & {
 export type CalibrationOutfit = Outfit & {
   id: string
   vector: StyleVector
+  reasons: string[]
 }
 
 const STYLE_LABELS: Record<string, string> = {
@@ -61,11 +62,11 @@ function buildReasons(outfit: Outfit, dna: StyleVector) {
     .map(([tag]) => `because you liked ${STYLE_LABELS[tag] ?? tag.replaceAll('_', ' ')}`)
 }
 
-function getChangedTags(items: WardrobeItem[]) {
+function getChangedTags(items: Array<{ style_tags: Record<string, number> }>) {
   return Array.from(
     new Set(
       items.flatMap((item) =>
-        Object.entries(item.style_tags)
+        Object.entries(item.style_tags ?? {})
           .filter(([, weight]) => typeof weight === 'number' && weight > 0)
           .map(([tag]) => tag),
       ),
@@ -208,6 +209,7 @@ export async function getCalibrationOutfits(): Promise<CalibrationOutfit[]> {
     ...outfit,
     id: savedOutfits[index].id,
     vector: dna,
+    reasons: buildReasons(outfit, dna),
   }))
 }
 
@@ -244,24 +246,36 @@ export async function getDailyOutfit(): Promise<DailyOutfit | null> {
 export async function submitOutfitFeedback(
   outfitId: string,
   liked: boolean,
-  items: WardrobeItem[],
 ): Promise<{ vector: StyleVector; changedTags: string[] }> {
-  return applyOutfitFeedback(outfitId, liked, items, 'daily', false)
+  return applyOutfitFeedback(outfitId, liked, 'daily', false)
 }
 
 export async function submitCalibrationFeedback(
   outfitId: string,
   liked: boolean,
-  items: WardrobeItem[],
-  isFinalOutfit: boolean,
+  isFinalOutfit: boolean = false,
 ): Promise<{ vector: StyleVector; changedTags: string[] }> {
-  return applyOutfitFeedback(outfitId, liked, items, 'calibration', isFinalOutfit)
+  return applyOutfitFeedback(outfitId, liked, 'calibration', isFinalOutfit)
+}
+
+export async function skipOutfitCalibration(): Promise<{ success: boolean }> {
+  const { supabase, userId } = await getAuthedUserId()
+
+  const { error } = await supabase
+    .from('users')
+    .update({ has_completed_calibration: true })
+    .eq('id', userId)
+
+  if (error) {
+    throw new Error(`Failed to skip calibration: ${error.message}`)
+  }
+
+  return { success: true }
 }
 
 async function applyOutfitFeedback(
   outfitId: string,
   liked: boolean,
-  items: WardrobeItem[],
   source: 'daily' | 'calibration',
   completeCalibration: boolean,
 ): Promise<{ vector: StyleVector; changedTags: string[] }> {
@@ -278,6 +292,29 @@ async function applyOutfitFeedback(
     throw new Error(`Failed to save feedback: ${feedbackError.message}`)
   }
 
+  // Fetch outfit item_ids from database using outfitId
+  const { data: outfitRow, error: outfitError } = await supabase
+    .from('outfits')
+    .select('item_ids')
+    .eq('id', outfitId)
+    .single()
+
+  if (outfitError || !outfitRow || !outfitRow.item_ids) {
+    throw new Error('Outfit not found')
+  }
+
+  const itemIds = outfitRow.item_ids as string[]
+
+  // Fetch items' style_tags from wardrobe_items server-side
+  const { data: items, error: itemsError } = await supabase
+    .from('wardrobe_items')
+    .select('style_tags')
+    .in('id', itemIds)
+
+  if (itemsError || !items) {
+    throw new Error('Could not fetch wardrobe items for outfit')
+  }
+
   const { data: dnaRow, error: dnaError } = await supabase
     .from('fashion_dna')
     .select('vector')
@@ -290,7 +327,7 @@ async function applyOutfitFeedback(
 
   const delta = liked ? 0.05 : -0.05
   const currentVector = (dnaRow.vector ?? {}) as StyleVector
-  const changedTags = getChangedTags(items)
+  const changedTags = getChangedTags(items as Array<{ style_tags: Record<string, number> }>)
 
   const nextVector: StyleVector = { ...currentVector }
   for (const tag of changedTags) {

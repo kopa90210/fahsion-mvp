@@ -4,6 +4,7 @@ import {
   getCalibrationOutfits,
   shouldShowOutfitCalibration,
 } from '@/src/app/actions/outfit'
+import { getFashionDnaSummary } from '@/src/app/actions/fashion-dna'
 import { buttonVariants } from '@/components/ui/button'
 import OutfitCalibrationScreen from './OutfitCalibrationScreen'
 
@@ -35,5 +36,13 @@ export default async function OutfitCalibrationPage() {
     )
   }
 
-  return <OutfitCalibrationScreen outfits={outfits} />
+  const { signals, feedbackCount } = await getFashionDnaSummary()
+
+  return (
+    <OutfitCalibrationScreen
+      outfits={outfits}
+      initialSignals={signals}
+      feedbackCount={feedbackCount}
+    />
+  )
 }

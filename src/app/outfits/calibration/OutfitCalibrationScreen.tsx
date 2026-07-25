@@ -16,57 +16,27 @@ import {
 } from '@/components/ui/card'
 import {
   submitCalibrationFeedback,
+  skipOutfitCalibration,
   type CalibrationOutfit,
 } from '@/src/app/actions/outfit'
-import type { StyleVector } from '@/src/lib/quiz/scoring'
-
-const TAG_LABELS: Record<string, string> = {
-  minimal: 'Minimal',
-  streetwear: 'Streetwear',
-  formal: 'Polished',
-  bohemian: 'Bohemian',
-  edgy: 'Edgy',
-  earth_tones: 'Earth tones',
-}
+import { getChangedTags, getOptimisticVector } from '@/src/lib/outfit/feedback-helpers'
+import { vectorToSignals } from '@/src/lib/fashion-dna/labels'
+import type { DnaSignal } from '@/src/lib/fashion-dna/types'
+import WhyThisExplainer from '@/src/components/outfit/WhyThisExplainer'
+import FashionDnaPanel from '@/src/components/fashion-dna/FashionDnaPanel'
 
 function formatRole(role: string) {
   return role.replaceAll('_', ' ')
 }
 
-function getChangedTags(outfit: CalibrationOutfit) {
-  return Array.from(
-    new Set(
-      outfit.items.flatMap((item) =>
-        Object.entries(item.style_tags)
-          .filter(([, weight]) => typeof weight === 'number' && weight > 0)
-          .map(([tag]) => tag),
-      ),
-    ),
-  )
-}
-
-function getOptimisticVector(
-  vector: StyleVector,
-  changedTags: string[],
-  liked: boolean,
-) {
-  const delta = liked ? 0.05 : -0.05
-  const nextVector = { ...vector }
-
-  for (const tag of changedTags) {
-    nextVector[tag] = Math.min(
-      1,
-      Math.max(0, Math.round(((nextVector[tag] ?? 0) + delta) * 100) / 100),
-    )
-  }
-
-  return nextVector
-}
-
 export default function OutfitCalibrationScreen({
   outfits,
+  initialSignals,
+  feedbackCount,
 }: {
   outfits: CalibrationOutfit[]
+  initialSignals: DnaSignal[]
+  feedbackCount: number
 }) {
   const router = useRouter()
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -74,18 +44,33 @@ export default function OutfitCalibrationScreen({
   const [lastFeedback, setLastFeedback] = useState<boolean | null>(null)
   const [vector, setVector] = useState(outfits[0].vector)
   const [isFinishing, setIsFinishing] = useState(false)
+  const [isSkipping, setIsSkipping] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [swipeCount, setSwipeCount] = useState(feedbackCount)
   const [, startTransition] = useTransition()
   const feedbackQueue = useRef<Promise<unknown>>(Promise.resolve())
 
   const outfit = outfits[currentIndex]
-  const topVectorEntries = useMemo(
-    () =>
-      Object.entries(vector)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 4),
-    [vector],
-  )
+
+  // Derive signals from the (potentially optimistically updated) vector
+  const signals = useMemo(() => vectorToSignals(vector), [vector])
+
+  function handleSkip() {
+    if (isSkipping || isFinishing) return
+    setIsSkipping(true)
+    startTransition(async () => {
+      try {
+        await skipOutfitCalibration()
+        router.replace('/outfits')
+        router.refresh()
+      } catch (error) {
+        setIsSkipping(false)
+        setErrorMessage(
+          error instanceof Error ? error.message : 'Could not skip calibration.',
+        )
+      }
+    })
+  }
 
   function handleFeedback(liked: boolean) {
     if (!visible || isFinishing) return
@@ -99,12 +84,12 @@ export default function OutfitCalibrationScreen({
     setErrorMessage(null)
     setVisible(false)
     setVector((current) => getOptimisticVector(current, changedTags, liked))
+    setSwipeCount((c) => c + 1)
 
     const feedbackPromise = feedbackQueue.current.then(() =>
       submitCalibrationFeedback(
         activeOutfit.id,
         liked,
-        activeOutfit.items,
         isFinalOutfit,
       ),
     )
@@ -152,9 +137,19 @@ export default function OutfitCalibrationScreen({
                 Tune your first looks
               </h1>
             </div>
-            <Badge variant="outline" className="border-[#b9aa99] bg-white/45 text-[#4f463d]">
-              {Math.min(currentIndex + 1, outfits.length)} of {outfits.length}
-            </Badge>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={handleSkip}
+                disabled={isSkipping || isFinishing}
+                className="text-xs text-[#7a6f62] underline-offset-4 hover:text-[#1d1b18] hover:underline transition-colors disabled:opacity-50"
+              >
+                Skip for now
+              </button>
+              <Badge variant="outline" className="border-[#b9aa99] bg-white/45 text-[#4f463d]">
+                {Math.min(currentIndex + 1, outfits.length)} of {outfits.length}
+              </Badge>
+            </div>
           </div>
 
           <AnimatePresence mode="wait">
@@ -212,9 +207,7 @@ export default function OutfitCalibrationScreen({
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#e4dbd0] pt-4">
-                      <p className="text-sm leading-6 text-[#6d6257]">
-                        Your response updates Fashion DNA immediately.
-                      </p>
+                      <WhyThisExplainer reasons={outfit.reasons} />
 
                       <div className="flex items-center gap-2">
                         <Button
@@ -267,32 +260,7 @@ export default function OutfitCalibrationScreen({
         </section>
 
         <aside className="lg:pt-[88px]">
-          <Card className="rounded-lg border-[#d8cec2] bg-white/70 shadow-sm">
-            <CardHeader>
-              <CardTitle>Fashion DNA</CardTitle>
-              <CardDescription>Visible preference weights after each response.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {topVectorEntries.map(([tag, weight]) => (
-                <div key={tag} className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span>{TAG_LABELS[tag] ?? tag.replaceAll('_', ' ')}</span>
-                    <span className="font-mono text-xs text-[#6d6257]">
-                      {Math.round(weight * 100)}%
-                    </span>
-                  </div>
-                  <div className="h-2 rounded-full bg-[#e6ddd2]">
-                    <motion.div
-                      className="h-full rounded-full bg-[#2f4237]"
-                      initial={false}
-                      animate={{ width: `${Math.round(weight * 100)}%` }}
-                      transition={{ duration: 0.22 }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          <FashionDnaPanel signals={signals} feedbackCount={swipeCount} />
         </aside>
       </div>
     </main>

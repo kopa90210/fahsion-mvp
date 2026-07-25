@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from 'react'
 import Image from 'next/image'
 import { AnimatePresence, motion } from 'framer-motion'
-import { ChevronDown, Heart, ThumbsDown } from 'lucide-react'
+import { Heart, ThumbsDown } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -15,69 +15,38 @@ import {
 } from '@/components/ui/card'
 import type { DailyOutfit } from '@/src/app/actions/outfit'
 import { submitOutfitFeedback, getDailyOutfit } from '@/src/app/actions/outfit'
-import type { StyleVector } from '@/src/lib/quiz/scoring'
-
-const TAG_LABELS: Record<string, string> = {
-  minimal: 'Minimal',
-  streetwear: 'Streetwear',
-  formal: 'Polished',
-  bohemian: 'Bohemian',
-  edgy: 'Edgy',
-  earth_tones: 'Earth tones',
-}
+import { getChangedTags, getOptimisticVector } from '@/src/lib/outfit/feedback-helpers'
+import { vectorToSignals } from '@/src/lib/fashion-dna/labels'
+import type { DnaSignal } from '@/src/lib/fashion-dna/types'
+import WhyThisExplainer from '@/src/components/outfit/WhyThisExplainer'
+import FashionDnaPanel from '@/src/components/fashion-dna/FashionDnaPanel'
 
 function formatRole(role: string) {
   return role.replaceAll('_', ' ')
 }
 
-function getChangedTags(outfit: DailyOutfit) {
-  return Array.from(
-    new Set(
-      outfit.items.flatMap((item) =>
-        Object.entries(item.style_tags)
-          .filter(([, weight]) => typeof weight === 'number' && weight > 0)
-          .map(([tag]) => tag),
-      ),
-    ),
-  )
-}
-
-function getOptimisticVector(
-  vector: StyleVector,
-  changedTags: string[],
-  liked: boolean,
-) {
-  const delta = liked ? 0.05 : -0.05
-  const nextVector = { ...vector }
-
-  for (const tag of changedTags) {
-    nextVector[tag] = Math.min(
-      1,
-      Math.max(0, Math.round(((nextVector[tag] ?? 0) + delta) * 100) / 100),
-    )
-  }
-
-  return nextVector
-}
-
-export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
+export default function DailyOutfitScreen({
+  outfit,
+  initialSignals,
+  feedbackCount,
+}: {
+  outfit: DailyOutfit
+  initialSignals: DnaSignal[]
+  feedbackCount: number
+}) {
   const [currentOutfit, setCurrentOutfit] = useState(outfit)
   const [viewState, setViewState] = useState<'outfit' | 'loading' | 'done'>('outfit')
   const [selectedFeedback, setSelectedFeedback] = useState<boolean | null>(null)
   const [vector, setVector] = useState(outfit.vector)
   const [pendingMessage, setPendingMessage] = useState<string | null>(null)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const [whyOpen, setWhyOpen] = useState(false)
+  const [swipeCount, setSwipeCount] = useState(feedbackCount)
   const [, startTransition] = useTransition()
 
   const changedTags = useMemo(() => getChangedTags(currentOutfit), [currentOutfit])
-  const topVectorEntries = useMemo(
-    () =>
-      Object.entries(vector)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 4),
-    [vector],
-  )
+
+  // Derive signals from the (potentially optimistically updated) vector
+  const signals = useMemo(() => vectorToSignals(vector), [vector])
 
   function handleFeedback(liked: boolean) {
     if (selectedFeedback !== null) return
@@ -85,6 +54,7 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
     setSelectedFeedback(liked)
     setErrorMessage(null)
     setVector((current) => getOptimisticVector(current, changedTags, liked))
+    setSwipeCount((c) => c + 1)
 
     if (liked) {
       setViewState('done')
@@ -95,7 +65,7 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
 
     startTransition(async () => {
       try {
-        const result = await submitOutfitFeedback(currentOutfit.id, liked, currentOutfit.items)
+        const result = await submitOutfitFeedback(currentOutfit.id, liked)
         setVector(result.vector)
         
         if (liked) {
@@ -105,7 +75,6 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
           if (nextOutfit) {
             setCurrentOutfit(nextOutfit)
             setSelectedFeedback(null)
-            setWhyOpen(false)
             setViewState('outfit')
           } else {
             setViewState('done')
@@ -119,6 +88,7 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
             : 'Feedback saved locally, but the style update failed.',
         )
         setPendingMessage(null)
+        setSwipeCount((c) => c - 1)
         if (!liked) {
           setViewState('outfit')
           setSelectedFeedback(null)
@@ -137,11 +107,11 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
                 Today&apos;s outfit
               </p>
               <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">
-                One look for today
+                Here is your recommendation
               </h1>
             </div>
             <Badge variant="outline" className="border-[#b9aa99] bg-white/45 text-[#4f463d]">
-              Recommended from your wardrobe
+              1 per day
             </Badge>
           </div>
 
@@ -151,14 +121,14 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
                 key={currentOutfit.id}
                 initial={{ opacity: 0, y: 18 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, x: selectedFeedback ? 52 : -52, scale: 0.98 }}
+                exit={{ opacity: 0, y: -18 }}
                 transition={{ duration: 0.3, ease: 'easeOut' }}
               >
                 <Card className="rounded-lg border-[#d8cec2] bg-white/70 shadow-sm">
                   <CardHeader className="gap-2">
-                    <CardTitle className="text-xl">Wear this combination</CardTitle>
+                    <CardTitle className="text-xl">Today&apos;s look</CardTitle>
                     <CardDescription>
-                      Built from pieces you already selected, with the strongest style match first.
+                      Built from your wardrobe pieces. Rate it to refine your style DNA.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">
@@ -200,18 +170,7 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
                     </div>
 
                     <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[#e4dbd0] pt-4">
-                      <button
-                        type="button"
-                        onClick={() => setWhyOpen((open) => !open)}
-                        className="inline-flex items-center gap-1.5 text-sm font-medium text-[#574d43] transition hover:text-[#1d1b18]"
-                        aria-expanded={whyOpen}
-                      >
-                        Why this
-                        <ChevronDown
-                          className={`size-4 transition ${whyOpen ? 'rotate-180' : ''}`}
-                          aria-hidden="true"
-                        />
-                      </button>
+                      <WhyThisExplainer reasons={currentOutfit.reasons} />
 
                       <div className="flex items-center gap-2">
                         <Button
@@ -235,25 +194,6 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
                         </Button>
                       </div>
                     </div>
-
-                    <AnimatePresence initial={false}>
-                      {whyOpen && (
-                        <motion.div
-                          initial={{ height: 0, opacity: 0 }}
-                          animate={{ height: 'auto', opacity: 1 }}
-                          exit={{ height: 0, opacity: 0 }}
-                          transition={{ duration: 0.2 }}
-                          className="overflow-hidden"
-                        >
-                          <div className="rounded-lg border border-[#e2d8cc] bg-[#faf7f2] p-4 text-sm leading-6 text-[#5d5349]">
-                            {currentOutfit.reasons.length > 0
-                              ? currentOutfit.reasons.join(', ')
-                              : 'because these pieces line up with the preferences you saved earlier'}
-                            .
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
                   </CardContent>
                 </Card>
               </motion.div>
@@ -302,32 +242,7 @@ export default function DailyOutfitScreen({ outfit }: { outfit: DailyOutfit }) {
         </section>
 
         <aside className="lg:pt-[88px]">
-          <Card className="rounded-lg border-[#d8cec2] bg-white/70 shadow-sm">
-            <CardHeader>
-              <CardTitle>Fashion DNA</CardTitle>
-              <CardDescription>Visible preference weights after this response.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {topVectorEntries.map(([tag, weight]) => (
-                <div key={tag} className="space-y-1.5">
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span>{TAG_LABELS[tag] ?? tag.replaceAll('_', ' ')}</span>
-                    <span className="font-mono text-xs text-[#6d6257]">
-                      {Math.round(weight * 100)}%
-                    </span>
-                  </div>
-                  <div className="h-2 rounded-full bg-[#e6ddd2]">
-                    <motion.div
-                      className="h-full rounded-full bg-[#2f4237]"
-                      initial={false}
-                      animate={{ width: `${Math.round(weight * 100)}%` }}
-                      transition={{ duration: 0.22 }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+          <FashionDnaPanel signals={signals} feedbackCount={swipeCount} />
         </aside>
       </div>
     </main>

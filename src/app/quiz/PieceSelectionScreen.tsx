@@ -1,202 +1,472 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Check } from 'lucide-react'
-import { CuratedItem, saveWardrobeSelection } from '../actions/wardrobe'
+import { Check, Search, X, ChevronLeft, ChevronRight, Sparkles } from 'lucide-react'
+import {
+  CuratedItem,
+  getRankedPieces,
+  searchPieces,
+  saveWardrobeSelection,
+} from '../actions/wardrobe'
+import { SELECTION_STEPS } from './selection-steps'
 
-export default function PieceSelectionScreen({
-  curatedItems,
-}: {
-  curatedItems: Record<string, CuratedItem[]>
-}) {
+export default function PieceSelectionScreen() {
   const router = useRouter()
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [currentStepIndex, setCurrentStepIndex] = useState(0)
+  const [selections, setSelections] = useState<Record<string, Set<string>>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [, startTransition] = useTransition()
 
-  // Track selection count per category
-  const getSelectedCountForCategory = (category: string) => {
-    return curatedItems[category]?.filter((item) => selectedIds.has(item.id)).length || 0
+  // Per-step data state
+  const [items, setItems] = useState<CuratedItem[]>([])
+  const [batch, setBatch] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [isLoadingMore, setIsLoadingMore] = useState(false)
+
+  // Search state
+  const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<CuratedItem[]>([])
+  const [isSearching, setIsSearching] = useState(false)
+  const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
+
+  const currentStep = SELECTION_STEPS[currentStepIndex]
+  const currentCategory = currentStep.category
+
+  const currentSelectedIds = selections[currentCategory] ?? new Set<string>()
+  const selectedCount = currentSelectedIds.size
+
+  const isStepValid = currentStep.required
+    ? selectedCount >= currentStep.minSelections
+    : true
+
+  // Total selected across all steps
+  const totalSelectedCount = Object.values(selections).reduce(
+    (acc, set) => acc + set.size,
+    0,
+  )
+
+  // Fetch initial batch for current step
+  const loadStepData = useCallback(async (cat: string) => {
+    setIsLoading(true)
+    setBatch(0)
+    setIsSearchOpen(false)
+    setSearchQuery('')
+    setSearchResults([])
+
+    try {
+      const res = await getRankedPieces(cat, 0)
+      setItems(res.items)
+      setHasMore(res.hasMore)
+    } catch (err) {
+      console.error('Failed to load step items:', err)
+      setItems([])
+      setHasMore(false)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadStepData(currentCategory)
+  }, [currentCategory, loadStepData])
+
+  // Load next batch ("Show more")
+  const handleShowMore = async () => {
+    if (isLoadingMore || !hasMore || batch >= 2) return
+    setIsLoadingMore(true)
+    const nextBatch = batch + 1
+
+    try {
+      const res = await getRankedPieces(currentCategory, nextBatch)
+      setItems((prev) => [...prev, ...res.items])
+      setBatch(nextBatch)
+      setHasMore(res.hasMore && nextBatch < 2)
+    } catch (err) {
+      console.error('Failed to load more items:', err)
+    } finally {
+      setIsLoadingMore(false)
+    }
+  }
+
+  // Handle Search Input with 300ms debounce
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val)
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current)
+
+    if (!val.trim()) {
+      setSearchResults([])
+      setIsSearching(false)
+      return
+    }
+
+    setIsSearching(true)
+    searchDebounceRef.current = setTimeout(async () => {
+      try {
+        const results = await searchPieces(currentCategory, val)
+        setSearchResults(results)
+      } catch (err) {
+        console.error('Search error:', err)
+        setSearchResults([])
+      } finally {
+        setIsSearching(false)
+      }
+    }, 300)
   }
 
   const toggleSelection = (id: string) => {
-    setSelectedIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) {
-        next.delete(id)
+    setSelections((prev) => {
+      const catSet = new Set(prev[currentCategory] ?? [])
+      if (catSet.has(id)) {
+        catSet.delete(id)
       } else {
-        next.add(id)
+        catSet.add(id)
       }
-      return next
+      return { ...prev, [currentCategory]: catSet }
     })
   }
 
-  const categories = Object.keys(curatedItems).filter((cat) => curatedItems[cat].length > 0)
-
-  const isSubmitEnabled = categories.every(
-    (cat) => getSelectedCountForCategory(cat) >= 2
-  )
-
-  const handleSubmit = async () => {
-    if (!isSubmitEnabled) return
-    setIsSubmitting(true)
-    
-    // Save to DB
-    await saveWardrobeSelection(Array.from(selectedIds))
-    
-    // Animate for 2 seconds then redirect
-    setTimeout(() => {
-      router.push('/outfits')
-    }, 2500)
+  const handleNextStep = () => {
+    if (!isStepValid) return
+    if (currentStepIndex < SELECTION_STEPS.length - 1) {
+      setCurrentStepIndex((prev) => prev + 1)
+    } else {
+      handleSubmit()
+    }
   }
 
-  // Animation for "Building your wardrobe..."
-  if (isSubmitting) {
-    const selectedItemsList = categories
-      .flatMap((cat) => curatedItems[cat])
-      .filter((item) => selectedIds.has(item.id))
+  const handlePrevStep = () => {
+    if (currentStepIndex > 0) {
+      setCurrentStepIndex((prev) => prev - 1)
+    }
+  }
 
+  const handleSkipStep = () => {
+    if (currentStep.required) return
+    if (currentStepIndex < SELECTION_STEPS.length - 1) {
+      setCurrentStepIndex((prev) => prev + 1)
+    } else {
+      handleSubmit()
+    }
+  }
+
+  const handleSubmit = async () => {
+    setIsSubmitting(true)
+
+    // Aggregate all selected IDs across all categories
+    const allSelectedIds = Object.values(selections).flatMap((set) =>
+      Array.from(set),
+    )
+
+    try {
+      await saveWardrobeSelection(allSelectedIds)
+      setTimeout(() => {
+        router.push('/outfits')
+      }, 2200)
+    } catch (err) {
+      console.error('Failed to submit wardrobe selection:', err)
+      setIsSubmitting(false)
+    }
+  }
+
+  // Active items list (search mode vs threshold ranked mode)
+  const displayItems = searchQuery.trim() ? searchResults : items
+
+  // Submission screen ("Building your wardrobe...")
+  if (isSubmitting) {
+    const allItems = items // or selected list
     return (
-      <div className="flex min-h-screen w-full flex-col items-center justify-center bg-[#0a0a0a] px-6 text-white overflow-hidden">
-        <h1 className="mb-8 text-2xl font-bold tracking-tight">
-          Building your wardrobe...
-        </h1>
-        <div className="flex flex-wrap justify-center gap-4 max-w-2xl">
-          {selectedItemsList.map((item, index) => (
-            <motion.div
-              key={item.id}
-              initial={{ opacity: 0, scale: 0.8 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: index * 0.1, duration: 0.5 }}
-              className="h-20 w-20 overflow-hidden rounded-xl border border-white/20 bg-white/5 relative"
-            >
-              {item.image_url ? (
-                <Image
-                  src={item.image_url}
-                  alt={item.display_name}
-                  fill
-                  sizes="80px"
-                  unoptimized
-                  className="object-cover"
-                />
-              ) : (
-                <div className="h-full w-full bg-white/10" />
-              )}
-            </motion.div>
-          ))}
-        </div>
+      <div className="flex min-h-screen w-full flex-col items-center justify-center bg-[#070708] px-6 text-white overflow-hidden">
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-center space-y-4 max-w-md"
+        >
+          <Sparkles className="h-10 w-10 mx-auto text-amber-300 animate-pulse" />
+          <h1 className="text-3xl font-bold tracking-tight">
+            Building your wardrobe...
+          </h1>
+          <p className="text-sm text-white/50">
+            Fusing your chosen pieces with your Style DNA to generate your first look.
+          </p>
+        </motion.div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] pb-32 pt-12 text-white px-4 sm:px-6 md:px-8">
-      <div className="mx-auto max-w-4xl space-y-12">
-        <div className="text-center space-y-3">
-          <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">
-            Curate Your Foundation
-          </h1>
-          <p className="text-white/50 max-w-md mx-auto">
-            Select the timeless pieces that will build your virtual wardrobe. 
-            Choose at least 2 items per category.
-          </p>
-        </div>
-
-        {categories.map((category) => (
-          <div key={category} className="space-y-6">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
-              <h2 className="text-xl font-semibold capitalize tracking-wide text-white/90">
-                {category}
-              </h2>
-              <span className="text-sm text-white/40">
-                {getSelectedCountForCategory(category)} / 2+ selected
+    <div className="min-h-screen bg-gradient-to-b from-[#0a0a0c] via-[#0d0d12] to-[#070708] pb-32 pt-8 text-white px-4 sm:px-6 md:px-8">
+      <div className="mx-auto max-w-4xl space-y-8">
+        
+        {/* Step Header & Progress */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              {currentStepIndex > 0 && (
+                <button
+                  type="button"
+                  onClick={handlePrevStep}
+                  className="rounded-full p-2 text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+                  aria-label="Previous step"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+              )}
+              <span className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200/80">
+                Step {currentStepIndex + 1} of 5 · {currentStep.label}
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-              {curatedItems[category].map((item) => {
-                const isSelected = selectedIds.has(item.id)
-                return (
-                  <motion.div
-                    key={item.id}
-                    whileTap={{ scale: 0.95 }}
-                    transition={{ duration: 0.15 }}
-                    onClick={() => toggleSelection(item.id)}
-                    className="relative cursor-pointer"
-                  >
-                    <Card
-                      className={`overflow-hidden rounded-2xl bg-white/5 border-2 transition-colors ${
-                        isSelected ? 'border-primary' : 'border-transparent'
-                      }`}
-                    >
-                      <div className="relative aspect-[3/4] w-full">
-                        {item.image_url ? (
-                          <Image
-                            src={item.image_url}
-                            alt={item.display_name}
-                            fill
-                            sizes="(min-width: 1024px) 20vw, (min-width: 768px) 25vw, (min-width: 640px) 33vw, 50vw"
-                            unoptimized
-                            className="object-cover"
-                          />
-                        ) : (
-                          // Fallback placeholder
-                          <div className="flex h-full w-full items-center justify-center bg-white/10 text-xs text-white/30">
-                            No Image
-                          </div>
-                        )}
-                        
-                        {/* Selected Checkmark Badge */}
-                        <AnimatePresence>
-                          {isSelected && (
-                            <motion.div
-                              initial={{ scale: 0, opacity: 0 }}
-                              animate={{ scale: 1, opacity: 1 }}
-                              exit={{ scale: 0, opacity: 0 }}
-                              className="absolute right-2 top-2"
-                            >
-                              <Badge variant="default" className="h-6 w-6 rounded-full p-0 flex items-center justify-center bg-primary text-primary-foreground shadow-sm">
-                                <Check className="h-3 w-3" strokeWidth={3} />
-                              </Badge>
-                            </motion.div>
-                          )}
-                        </AnimatePresence>
-                      </div>
-                      <div className="p-3">
-                        <p className="truncate text-sm font-medium text-white/90">
-                          {item.display_name}
-                        </p>
-                      </div>
-                    </Card>
-                  </motion.div>
-                )
-              })}
-            </div>
+            {/* Optional Step Skip Button */}
+            {!currentStep.required && (
+              <button
+                type="button"
+                onClick={handleSkipStep}
+                className="text-xs text-white/50 hover:text-white underline-offset-4 hover:underline transition-colors"
+              >
+                Skip this step
+              </button>
+            )}
           </div>
-        ))}
+
+          {/* Progress Bar */}
+          <div className="h-1.5 w-full rounded-full bg-white/10 overflow-hidden">
+            <motion.div
+              className="h-full bg-gradient-to-r from-amber-400 to-amber-200 rounded-full"
+              initial={{ width: '0%' }}
+              animate={{
+                width: `${((currentStepIndex + 1) / SELECTION_STEPS.length) * 100}%`,
+              }}
+              transition={{ duration: 0.3 }}
+            />
+          </div>
+
+          {/* Step Heading + Search Toggle */}
+          <div className="flex items-end justify-between gap-4 pt-2">
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">
+                Choose your {currentStep.label.toLowerCase()}
+              </h1>
+              <p className="text-xs text-white/50 mt-1">
+                {currentStep.required
+                  ? `Select at least ${currentStep.minSelections} items to advance.`
+                  : 'Optional — select any pieces you own or skip.'}
+              </p>
+            </div>
+
+            {/* Search Toggle Icon */}
+            <button
+              type="button"
+              onClick={() => {
+                setIsSearchOpen((prev) => !prev)
+                if (isSearchOpen) {
+                  setSearchQuery('')
+                  setSearchResults([])
+                }
+              }}
+              className={`rounded-full p-2.5 transition-colors ${
+                isSearchOpen
+                  ? 'bg-amber-400 text-black'
+                  : 'bg-white/5 text-white/70 hover:bg-white/10 hover:text-white'
+              }`}
+              aria-label="Toggle search"
+            >
+              {isSearchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+            </button>
+          </div>
+
+          {/* Search Input Bar (when expanded) */}
+          <AnimatePresence>
+            {isSearchOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                className="overflow-hidden"
+              >
+                <div className="relative pt-2">
+                  <Search className="absolute left-3.5 top-5 h-4 w-4 text-white/40" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => handleSearchChange(e.target.value)}
+                    placeholder={`Search ${currentStep.label.toLowerCase()}...`}
+                    className="w-full rounded-xl border border-white/15 bg-white/5 py-2.5 pl-10 pr-4 text-sm text-white placeholder-white/40 focus:border-amber-300 focus:outline-none"
+                    autoFocus
+                  />
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Wardrobe Reveal Staggered Grid */}
+        <AnimatePresence mode="wait">
+          {isLoading ? (
+            <motion.div
+              key="loading"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5"
+            >
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="aspect-[3/4] animate-pulse rounded-2xl border border-white/10 bg-white/5"
+                />
+              ))}
+            </motion.div>
+          ) : (
+            <motion.div
+              key={`${currentCategory}-${searchQuery}`}
+              initial={{ opacity: 0, filter: 'blur(8px)' }}
+              animate={{ opacity: 1, filter: 'blur(0px)' }}
+              exit={{ opacity: 0, filter: 'blur(8px)' }}
+              transition={{ duration: 0.15 }}
+            >
+              {displayItems.length === 0 ? (
+                <div className="flex min-h-[220px] flex-col items-center justify-center rounded-2xl border border-white/10 bg-white/5 text-center p-6">
+                  <p className="text-sm font-medium text-white/60">
+                    {searchQuery.trim()
+                      ? `No ${currentStep.label.toLowerCase()} match "${searchQuery}".`
+                      : `No items available in this category.`}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                  {displayItems.map((item, index) => {
+                    const isSelected = currentSelectedIds.has(item.id)
+                    return (
+                      <motion.div
+                        key={item.id}
+                        initial={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
+                        animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                        transition={{
+                          delay: index * 0.04,
+                          duration: 0.3,
+                          ease: 'easeOut',
+                        }}
+                        whileTap={{ scale: 0.96 }}
+                        onClick={() => toggleSelection(item.id)}
+                        className="relative cursor-pointer"
+                      >
+                        <Card
+                          className={`overflow-hidden rounded-2xl bg-white/5 border-2 transition-all ${
+                            isSelected
+                              ? 'border-amber-300 ring-2 ring-amber-300/30'
+                              : 'border-transparent hover:border-white/20'
+                          }`}
+                        >
+                          <div className="relative aspect-[3/4] w-full bg-white/5">
+                            {item.image_url ? (
+                              <Image
+                                src={item.image_url}
+                                alt={item.display_name}
+                                fill
+                                sizes="(min-width: 1024px) 20vw, (min-width: 768px) 25vw, (min-width: 640px) 33vw, 50vw"
+                                unoptimized
+                                className="object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center bg-white/10 text-xs text-white/30">
+                                No Image
+                              </div>
+                            )}
+
+                            <AnimatePresence>
+                              {isSelected && (
+                                <motion.div
+                                  initial={{ scale: 0, opacity: 0 }}
+                                  animate={{ scale: 1, opacity: 1 }}
+                                  exit={{ scale: 0, opacity: 0 }}
+                                  className="absolute right-2 top-2"
+                                >
+                                  <Badge className="h-6 w-6 rounded-full p-0 flex items-center justify-center bg-amber-300 text-black shadow-md border-none">
+                                    <Check className="h-3.5 w-3.5" strokeWidth={3} />
+                                  </Badge>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+                          </div>
+                          <div className="p-3">
+                            <p className="truncate text-sm font-medium text-white/90">
+                              {item.display_name}
+                            </p>
+                          </div>
+                        </Card>
+                      </motion.div>
+                    )
+                  })}
+                </div>
+              )}
+
+              {/* "Show More" Pagination Action */}
+              {!searchQuery.trim() && hasMore && (
+                <div className="mt-8 flex justify-center">
+                  <button
+                    type="button"
+                    onClick={handleShowMore}
+                    disabled={isLoadingMore}
+                    className="rounded-full border border-white/20 bg-white/5 px-6 py-2.5 text-xs font-semibold text-white/80 hover:bg-white/10 hover:text-white transition-all disabled:opacity-50"
+                  >
+                    {isLoadingMore ? 'Loading more...' : 'Show more pieces'}
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
+
       </div>
 
-      {/* Sticky Bottom Bar */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-[#0a0a0a]/80 px-6 py-4 backdrop-blur-md">
+      {/* Sticky Bottom Navigation Bar */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-[#070708]/90 px-6 py-4 backdrop-blur-lg">
         <div className="mx-auto flex max-w-4xl items-center justify-between">
-          <div className="text-sm font-medium text-white/80">
-            {selectedIds.size} items selected
+          <div className="text-xs text-white/60">
+            <span className="font-medium text-white">
+              {selectedCount}
+            </span>{' '}
+            selected in {currentStep.label.toLowerCase()} ({totalSelectedCount} total)
           </div>
-          <button
-            onClick={handleSubmit}
-            disabled={!isSubmitEnabled}
-            className={`rounded-full px-6 py-2.5 text-sm font-semibold transition-all ${
-              isSubmitEnabled
-                ? 'bg-white text-black hover:bg-white/90'
-                : 'cursor-not-allowed bg-white/10 text-white/30'
-            }`}
-          >
-            Build Wardrobe
-          </button>
+
+          <div className="flex items-center gap-3">
+            {currentStepIndex > 0 && (
+              <button
+                type="button"
+                onClick={handlePrevStep}
+                className="rounded-full px-4 py-2.5 text-xs font-semibold text-white/70 hover:text-white transition-colors"
+              >
+                Back
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleNextStep}
+              disabled={!isStepValid}
+              className={`flex items-center gap-2 rounded-full px-6 py-2.5 text-xs font-semibold transition-all ${
+                isStepValid
+                  ? 'bg-amber-300 text-black hover:bg-amber-200 shadow-md'
+                  : 'cursor-not-allowed bg-white/10 text-white/30'
+              }`}
+            >
+              {currentStepIndex === SELECTION_STEPS.length - 1 ? (
+                'Build my wardrobe'
+              ) : (
+                <>
+                  Next
+                  <ChevronRight className="h-4 w-4" />
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
     </div>

@@ -1,0 +1,19 @@
+DELETE FROM user_wardrobe_items;
+DELETE FROM wardrobe_items;
+DELETE FROM extraction_log;
+
+(for delete extraction photos )
+
+ 1- $env:Path = "D:\Program Files\nodejs;" + $env:Path
+cd f:\project\autofashion
+[python.exe](http://_vscodecontentref_/2) [extract_and_upload.py](http://_vscodecontentref_/3) --photos <your-image-folder>
+2- $env:Path = "D:\Program Files\nodejs;" + $env:Path
+cd F:\project\autofashion
+& "F:\project\autofashion\.venv\Scripts\python.exe" `
+  "F:\project\autofashion\extract_and_upload.py" `
+  --photos "F:\project\autofashion\supabase\Datasets" `
+  --force-duplicates
+
+(run with extract_and_upload)
+
+F:\project\autofashion\.venv\Scripts\python.exe F:\project\autofashion\extract_and_upload.py --photos .\supabase\Datasets --min-confidence 0.6

@@ -39,9 +39,12 @@ export default function OutfitCalibrationScreen({
   feedbackCount: number
 }) {
   const router = useRouter()
-  const [currentIndex, setCurrentIndex] = useState(0)
+  // const [currentIndex, setCurrentIndex] = useState(0)
+  const [round, setRound] = useState(1) // 1, 2, or 3
   const [visible, setVisible] = useState(true)
   const [lastFeedback, setLastFeedback] = useState<boolean | null>(null)
+  // const [vector, setVector] = useState(outfits[0].vector)
+  const [currentOutfit, setCurrentOutfit] = useState(outfits[0])
   const [vector, setVector] = useState(outfits[0].vector)
   const [isFinishing, setIsFinishing] = useState(false)
   const [isSkipping, setIsSkipping] = useState(false)
@@ -50,7 +53,8 @@ export default function OutfitCalibrationScreen({
   const [, startTransition] = useTransition()
   const feedbackQueue = useRef<Promise<unknown>>(Promise.resolve())
 
-  const outfit = outfits[currentIndex]
+  // const outfit = outfits[currentIndex]
+  const outfit = currentOutfit
 
   // Derive signals from the (potentially optimistically updated) vector
   const signals = useMemo(() => vectorToSignals(vector), [vector])
@@ -76,8 +80,9 @@ export default function OutfitCalibrationScreen({
     if (!visible || isFinishing) return
 
     const activeOutfit = outfit
-    const activeIndex = currentIndex
-    const isFinalOutfit = activeIndex === outfits.length - 1
+    // const activeIndex = currentIndex
+    // const isFinalOutfit = activeIndex === outfits.length - 1
+    const isFinalOutfit = round === 3
     const changedTags = getChangedTags(activeOutfit)
 
     setLastFeedback(liked)
@@ -98,10 +103,26 @@ export default function OutfitCalibrationScreen({
 
     window.setTimeout(() => {
       if (!isFinalOutfit) {
-        setCurrentIndex(activeIndex + 1)
-        setLastFeedback(null)
-        setVisible(true)
+        // setCurrentIndex(activeIndex + 1)
+        // setLastFeedback(null)
+        // setVisible(true)
+        // return
+
+         startTransition(async () => {
+         try {
+            const result = await feedbackPromise
+            if (result.nextOutfit) {
+              setCurrentOutfit(result.nextOutfit)           
+                 setVector(result.vector)
+           }
+         } finally {
+            setRound((r) => r + 1)
+           setLastFeedback(null)
+           setVisible(true)
+          }
+        })
         return
+
       }
 
       setIsFinishing(true)
@@ -147,7 +168,7 @@ export default function OutfitCalibrationScreen({
                 Skip for now
               </button>
               <Badge variant="outline" className="border-[#b9aa99] bg-white/45 text-[#4f463d]">
-                {Math.min(currentIndex + 1, outfits.length)} of {outfits.length}
+                {round} of 3
               </Badge>
             </div>
           </div>

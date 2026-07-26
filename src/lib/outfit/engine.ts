@@ -102,8 +102,10 @@ export function scoreOutfit(items: WardrobeItem[], dna: StyleVector): number {
  * Produce a stable string key for an outfit to detect duplicates.
  * Sorted so that slot order doesn't create phantom duplicates.
  */
-function outfitKey(items: WardrobeItem[]): string {
-  return items
+// function outfitKey(items: WardrobeItem[]): string {
+ export function outfitKey(items: { id: string }[]): string {
+
+return items
     .map((i) => i.id)
     .sort()
     .join('|');

@@ -390,6 +390,8 @@ def find_duplicate_display_name(
     supabase: Any,
     category: str,
     new_display_name: str,
+    color_primary: str | None = None,
+    material_primary: str | None = None,
     threshold: float = 0.85,
 ) -> tuple[str | None, float]:
     if not new_display_name or not category:
@@ -398,7 +400,7 @@ def find_duplicate_display_name(
     try:
         response = (
             supabase.table("wardrobe_items")
-            .select("display_name")
+           .select("display_name, color, material")
             .eq("category", category)
             .execute()
         )
@@ -411,6 +413,22 @@ def find_duplicate_display_name(
         existing_name = row.get("display_name")
         if not existing_name:
             continue
+
+
+        # Composite check first: same category + same primary color +
+       # same primary material is a much stronger duplicate signal than
+       # name similarity, since the extraction model generates a fresh
+        # descriptive name every run (two angles of the same shirt can
+        # get named "White Oxford" vs "Clean White Button-Down"). 
+        existing_color = (row.get("color") or {}).get("primary")
+        existing_material = (row.get("material") or {}).get("primary")
+        if (
+           color_primary
+            and material_primary
+            and existing_color == color_primary
+           and existing_material == material_primary
+        ):
+            return existing_name, 1.0
         existing_name_clean = existing_name.strip().lower()
         ratio = SequenceMatcher(None, new_name_clean, existing_name_clean).ratio()
         if ratio > threshold:
@@ -471,8 +489,10 @@ def process_photo(
 
     category = attributes.get("category", "")
     display_name = attributes.get("display_name", "")
+    color_primary = (attributes.get("color") or {}).get("primary")
+    material_primary = (attributes.get("material") or {}).get("primary")
     duplicate_name, similarity = find_duplicate_display_name(
-        supabase, category, display_name
+       supabase, category, display_name, color_primary, material_primary
     )
     if duplicate_name:
         problem_msg = f"possible duplicate of {duplicate_name}"

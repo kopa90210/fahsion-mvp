@@ -120,6 +120,7 @@ function scoreItem(
 export async function getRankedPieces(
   category: string,
   batch = 0,
+   excludeIds: string[] = [],
 ): Promise<RankedPiecesResult> {
   if (batch < 0 || batch >= MAX_BATCHES) {
     return { items: [], hasMore: false }
@@ -156,8 +157,10 @@ export async function getRankedPieces(
 
   // 3. Filter to requested category and score; dedupe by stable item id.
   const seenIds = new Set<string>()
+  const excludeSet = new Set(excludeIds)
   const categoryItems = items
     .filter((item) => mapWardrobeCategory(item) === category)
+     .filter((item) => !excludeSet.has(item.id))
     .filter((item) => {
       if (seenIds.has(item.id)) return false
       seenIds.add(item.id)

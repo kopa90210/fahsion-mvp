@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
@@ -84,7 +84,12 @@ export default function PieceSelectionScreen() {
     const nextBatch = batch + 1
 
     try {
-      const res = await getRankedPieces(currentCategory, nextBatch)
+      // const res = await getRankedPieces(currentCategory, nextBatch)
+       const res = await getRankedPieces(
+        currentCategory,
+        nextBatch,
+        items.map((i) => i.id), // never re-show what's already on screen
+     )
       setItems((prev) => [...prev, ...res.items])
       setBatch(nextBatch)
       setHasMore(res.hasMore && nextBatch < 2)
@@ -176,8 +181,20 @@ export default function PieceSelectionScreen() {
   }
 
   // Active items list (search mode vs threshold ranked mode)
-  const displayItems = searchQuery.trim() ? searchResults : items
-
+  // const displayItems = searchQuery.trim() ? searchResults : items
+// Active items list (search mode vs threshold ranked mode).
+  // Deduped defensively — a growing, paginated list is exactly the kind
+  // of state that can pick up an accidental repeat; this guarantees the
+  // render never breaks on it even if a future data source slips one in.
+  const rawDisplayItems = searchQuery.trim() ? searchResults : items
+  const displayItems = useMemo(() => {
+    const seen = new Set<string>()
+    return rawDisplayItems.filter((item) => {
+      if (seen.has(item.id)) return false
+      seen.add(item.id)
+      return true
+    })
+  }, [rawDisplayItems])
   // Submission screen ("Building your wardrobe...")
   if (isSubmitting) {
     const allItems = items // or selected list
@@ -314,7 +331,7 @@ export default function PieceSelectionScreen() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5"
+               className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5"
             >
               {Array.from({ length: 8 }).map((_, i) => (
                 <div
@@ -340,14 +357,21 @@ export default function PieceSelectionScreen() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+                 <div className="flex gap-4 overflow-x-auto pb-4 pt-1 snap-x snap-mandatory scrollbar-none">
                   {displayItems.map((item, index) => {
                     const isSelected = currentSelectedIds.has(item.id)
                     return (
                       <motion.div
                         key={item.id}
+                          layoutId={`card-${item.id}`}
                         initial={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
-                        animate={{ opacity: 1, y: 0, filter: 'blur(0px)' }}
+                       animate={{
+  opacity: isSelected ? 0.35 : 1,
+                          scale: isSelected ? 0.94 : 1,
+                          y: 0,
+                          filter: 'blur(0px)',
+                        }}
+                      
                         transition={{
                           delay: index * 0.04,
                           duration: 0.3,
@@ -355,7 +379,8 @@ export default function PieceSelectionScreen() {
                         }}
                         whileTap={{ scale: 0.96 }}
                         onClick={() => toggleSelection(item.id)}
-                        className="relative cursor-pointer"
+                       className="relative w-32 shrink-0 cursor-pointer snap-start"
+
                       >
                         <Card
                           className={`overflow-hidden rounded-2xl bg-white/5 border-2 transition-all ${
@@ -406,6 +431,31 @@ export default function PieceSelectionScreen() {
                   })}
                 </div>
               )}
+
+ {/* Hand tray — pieces the user has picked up for this step */}
+              <div className="mt-4 flex min-h-[68px] items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
+                <span className="shrink-0 text-xs text-white/40">In hand</span>
+                <div className="flex flex-1 flex-wrap gap-2">
+                  {currentSelectedIds.size === 0 ? (
+                    <span className="text-xs text-white/30">Tap a piece on the rail to pick it up</span>
+                  ) : (
+                   Array.from(currentSelectedIds).map((id) => {
+                      const item = items.find((i) => i.id === id)
+                      if (!item) return null
+                      return (                        <motion.button
+                          key={id}
+                          layoutId={`card-${id}`}
+                         onClick={() => toggleSelection(id)}
+                         className="flex items-center gap-1.5 rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs font-medium text-amber-200"
+                        >
+                          {item.display_name}
+                          <X className="h-3 w-3" />
+                       </motion.button>
+                     )
+                    })
+                  )}
+                </div>
+              </div>
 
               {/* "Show More" Pagination Action */}
               {!searchQuery.trim() && hasMore && (

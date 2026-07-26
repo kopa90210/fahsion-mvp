@@ -17,6 +17,8 @@ let tableResponses: Record<
   { data: unknown; error: unknown }
 > = {}
 
+let upsertCalls: Record<string, unknown[]> = {}
+
 function createQueryBuilder(tableName: string) {
   const response = () =>
     tableResponses[tableName] ?? { data: null, error: null }
@@ -27,7 +29,11 @@ function createQueryBuilder(tableName: string) {
     in: vi.fn().mockReturnThis(),
     single: vi.fn().mockImplementation(() => response()),
     insert: vi.fn().mockReturnThis(),
-    upsert: vi.fn().mockReturnThis(),
+    upsert: vi.fn().mockImplementation((payload: unknown) => {
+      if (!upsertCalls[tableName]) upsertCalls[tableName] = []
+      upsertCalls[tableName].push(payload)
+      return builder
+    }),
   }
 
   builder.then = (resolve: (v: unknown) => unknown) => resolve(response())
@@ -49,7 +55,7 @@ vi.mock('@/src/lib/supabase/server', () => ({
 // Import functions under test
 // ---------------------------------------------------------------------------
 
-const { getCuratedPieces, getRankedPieces, searchPieces } = await import(
+const { getCuratedPieces, getRankedPieces, searchPieces, saveWardrobeSelection } = await import(
   '@/src/app/actions/wardrobe'
 )
 
@@ -93,6 +99,7 @@ function makeItems(
 beforeEach(() => {
   vi.clearAllMocks()
   tableResponses = {}
+  upsertCalls = {}
 })
 
 // ---------------------------------------------------------------------------
@@ -240,6 +247,40 @@ describe('searchPieces', () => {
   })
 })
 
+// ---------------------------------------------------------------------------
+// saveWardrobeSelection - five-category round trip
+// ---------------------------------------------------------------------------
+
+describe('saveWardrobeSelection', () => {
+  it('upserts every selected item across all five wardrobe categories', async () => {
+    mockAuthenticatedUser()
+
+    const selectedIdsByCategory = {
+      top: ['top-1', 'top-2'],
+      bottom: ['bottom-1', 'bottom-2'],
+      footwear: ['footwear-1', 'footwear-2'],
+      outerwear: ['outerwear-1'],
+      accessory: ['accessory-1'],
+    }
+    const selectedIds = Object.values(selectedIdsByCategory).flat()
+
+    const result = await saveWardrobeSelection(selectedIds)
+    expect(result).toEqual({ success: true })
+
+    const [payload] = upsertCalls['user_wardrobe_items'] as Array<
+      Array<{ user_id: string; item_id: string }>
+    >
+    const mockedFetchRows = payload.map((row) => ({ item_id: row.item_id }))
+
+    expect(payload).toHaveLength(selectedIds.length)
+    expect(payload.map((row) => row.user_id)).toEqual(
+      selectedIds.map(() => TEST_USER_ID),
+    )
+    expect(mockedFetchRows.map((row) => row.item_id).sort()).toEqual(
+      [...selectedIds].sort(),
+    )
+  })
+})
 // ---------------------------------------------------------------------------
 // getCuratedPieces — backward compatibility
 // ---------------------------------------------------------------------------

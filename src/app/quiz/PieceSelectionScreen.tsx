@@ -23,7 +23,8 @@ export default function PieceSelectionScreen() {
   const [, startTransition] = useTransition()
 
   // Per-step data state
-  const [items, setItems] = useState<CuratedItem[]>([])
+  const [itemsByCategory, setItemsByCategory] = useState<Record<string, CuratedItem[]>>({})
+  const [submitError, setSubmitError] = useState<string | null>(null)
   const [batch, setBatch] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [isLoading, setIsLoading] = useState(true)
@@ -39,6 +40,7 @@ export default function PieceSelectionScreen() {
   const currentStep = SELECTION_STEPS[currentStepIndex]
   const currentCategory = currentStep.category
 
+  const items = itemsByCategory[currentCategory] ?? []
   const currentSelectedIds = selections[currentCategory] ?? new Set<string>()
   const selectedCount = currentSelectedIds.size
 
@@ -62,11 +64,16 @@ export default function PieceSelectionScreen() {
 
     try {
       const res = await getRankedPieces(cat, 0)
-      setItems(res.items)
+      setItemsByCategory((prev) => {
+        const existing = prev[cat] ?? []
+        const seen = new Set(existing.map((item) => item.id))
+        const merged = [...existing, ...res.items.filter((item) => !seen.has(item.id))]
+        return { ...prev, [cat]: merged }
+      })
       setHasMore(res.hasMore)
     } catch (err) {
       console.error('Failed to load step items:', err)
-      setItems([])
+      setItemsByCategory((prev) => (prev[cat] ? prev : { ...prev, [cat]: [] }))
       setHasMore(false)
     } finally {
       setIsLoading(false)
@@ -84,13 +91,17 @@ export default function PieceSelectionScreen() {
     const nextBatch = batch + 1
 
     try {
-      // const res = await getRankedPieces(currentCategory, nextBatch)
-       const res = await getRankedPieces(
+      const res = await getRankedPieces(
         currentCategory,
         nextBatch,
         items.map((i) => i.id), // never re-show what's already on screen
-     )
-      setItems((prev) => [...prev, ...res.items])
+      )
+      setItemsByCategory((prev) => {
+        const existing = prev[currentCategory] ?? []
+        const seen = new Set(existing.map((item) => item.id))
+        const merged = [...existing, ...res.items.filter((item) => !seen.has(item.id))]
+        return { ...prev, [currentCategory]: merged }
+      })
       setBatch(nextBatch)
       setHasMore(res.hasMore && nextBatch < 2)
     } catch (err) {
@@ -116,6 +127,12 @@ export default function PieceSelectionScreen() {
       try {
         const results = await searchPieces(currentCategory, val)
         setSearchResults(results)
+        setItemsByCategory((prev) => {
+          const existing = prev[currentCategory] ?? []
+          const seen = new Set(existing.map((item) => item.id))
+          const merged = [...existing, ...results.filter((item) => !seen.has(item.id))]
+          return { ...prev, [currentCategory]: merged }
+        })
       } catch (err) {
         console.error('Search error:', err)
         setSearchResults([])
@@ -162,6 +179,7 @@ export default function PieceSelectionScreen() {
   }
 
   const handleSubmit = async () => {
+    setSubmitError(null)
     setIsSubmitting(true)
 
     // Aggregate all selected IDs across all categories
@@ -177,24 +195,25 @@ export default function PieceSelectionScreen() {
     } catch (err) {
       console.error('Failed to submit wardrobe selection:', err)
       setIsSubmitting(false)
+      setSubmitError('We could not save your selections. Please try again.')
     }
   }
 
   // Active items list (search mode vs threshold ranked mode)
   // const displayItems = searchQuery.trim() ? searchResults : items
 // Active items list (search mode vs threshold ranked mode).
-  // Deduped defensively — a growing, paginated list is exactly the kind
+  // Deduped defensively - a growing, paginated list is exactly the kind
   // of state that can pick up an accidental repeat; this guarantees the
   // render never breaks on it even if a future data source slips one in.
   const rawDisplayItems = searchQuery.trim() ? searchResults : items
   const displayItems = useMemo(() => {
     const seen = new Set<string>()
     return rawDisplayItems.filter((item) => {
-      if (seen.has(item.id)) return false
+      if (seen.has(item.id) || currentSelectedIds.has(item.id)) return false
       seen.add(item.id)
       return true
     })
-  }, [rawDisplayItems])
+  }, [rawDisplayItems, currentSelectedIds])
   // Submission screen ("Building your wardrobe...")
   if (isSubmitting) {
     const allItems = items // or selected list
@@ -236,7 +255,7 @@ export default function PieceSelectionScreen() {
                 </button>
               )}
               <span className="text-xs font-semibold uppercase tracking-[0.2em] text-amber-200/80">
-                Step {currentStepIndex + 1} of 5 · {currentStep.label}
+                Step {currentStepIndex + 1} of 5 - {currentStep.label}
               </span>
             </div>
 
@@ -273,7 +292,7 @@ export default function PieceSelectionScreen() {
               <p className="text-xs text-white/50 mt-1">
                 {currentStep.required
                   ? `Select at least ${currentStep.minSelections} items to advance.`
-                  : 'Optional — select any pieces you own or skip.'}
+                  : 'Optional - select any pieces you own or skip.'}
               </p>
             </div>
 
@@ -364,15 +383,15 @@ export default function PieceSelectionScreen() {
                     return (
                       <motion.div
                         key={item.id}
-                          layoutId={`card-${item.id}`}
+                        layout
+                        layoutId={`card-${item.id}`}
                         initial={{ opacity: 0, y: 16, filter: 'blur(4px)' }}
-                       animate={{
-  opacity: isSelected ? 0.35 : 1,
-                          scale: isSelected ? 0.94 : 1,
+                        animate={{
+                          opacity: 1,
+                          scale: 1,
                           y: 0,
                           filter: 'blur(0px)',
                         }}
-                      
                         transition={{
                           delay: index * 0.04,
                           duration: 0.3,
@@ -380,12 +399,11 @@ export default function PieceSelectionScreen() {
                         }}
                         whileTap={{ scale: 0.96 }}
                         onClick={() => toggleSelection(item.id)}
-                       className="relative w-32 shrink-0 cursor-pointer snap-start"
-
+                        className="relative w-32 shrink-0 cursor-pointer snap-start"
                       >
                         <Card
                           className={`overflow-hidden rounded-2xl bg-white/5 border-2 transition-all ${
-                            isSelected
+                            currentSelectedIds.has(item.id)
                               ? 'border-amber-300 ring-2 ring-amber-300/30'
                               : 'border-transparent hover:border-white/20'
                           }`}
@@ -407,7 +425,7 @@ export default function PieceSelectionScreen() {
                             )}
 
                             <AnimatePresence>
-                              {isSelected && (
+                              {currentSelectedIds.has(item.id) && (
                                 <motion.div
                                   initial={{ scale: 0, opacity: 0 }}
                                   animate={{ scale: 1, opacity: 1 }}
@@ -447,26 +465,28 @@ export default function PieceSelectionScreen() {
                 </div>
               )}
 
- {/* Hand tray — pieces the user has picked up for this step */}
+              {/* Hand tray - pieces the user has picked up for this step */}
               <div className="mt-4 flex min-h-[68px] items-center gap-2 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
                 <span className="shrink-0 text-xs text-white/40">In hand</span>
                 <div className="flex flex-1 flex-wrap gap-2">
                   {currentSelectedIds.size === 0 ? (
                     <span className="text-xs text-white/30">Tap a piece on the rail to pick it up</span>
                   ) : (
-                   Array.from(currentSelectedIds).map((id) => {
-                      const item = items.find((i) => i.id === id)
-                      if (!item) return null
-                      return (                        <motion.button
+                    Array.from(currentSelectedIds).map((id) => {
+                      const item = itemsByCategory[currentCategory]?.find((i) => i.id === id)
+                      const label = item?.display_name ?? id + ' - Loading details...'
+
+                      return (
+                        <motion.button
                           key={id}
                           layoutId={`card-${id}`}
-                         onClick={() => toggleSelection(id)}
-                         className="flex items-center gap-1.5 rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs font-medium text-amber-200"
+                          onClick={() => toggleSelection(id)}
+                          className="flex items-center gap-1.5 rounded-full border border-amber-300/40 bg-amber-300/10 px-3 py-1 text-xs font-medium text-amber-200"
                         >
-                          {item.display_name}
+                          {label}
                           <X className="h-3 w-3" />
-                       </motion.button>
-                     )
+                        </motion.button>
+                      )
                     })
                   )}
                 </div>
@@ -477,6 +497,21 @@ export default function PieceSelectionScreen() {
         </AnimatePresence>
 
       </div>
+
+      {submitError && (
+        <div className="fixed bottom-20 left-4 right-4 z-50 mx-auto max-w-4xl rounded-xl border border-red-300/30 bg-red-950/90 px-4 py-3 text-sm text-red-100">
+          <div className="flex items-center justify-between gap-3">
+            <span>{submitError}</span>
+            <button
+              type="button"
+              onClick={handleSubmit}
+              className="rounded-lg bg-white/10 px-3 py-1.5 font-semibold hover:bg-white/20"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Sticky Bottom Navigation Bar */}
       <div className="fixed bottom-0 left-0 right-0 z-50 border-t border-white/10 bg-[#070708]/90 px-6 py-4 backdrop-blur-lg">

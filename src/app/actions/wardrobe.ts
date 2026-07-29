@@ -1,6 +1,7 @@
 'use server'
 
 import { createClient } from '@/src/lib/supabase/server'
+import { normalizeWardrobeItem } from '@/src/lib/wardrobe/normalize'
 
 // ---------------------------------------------------------------------------
 // Public types — the only shape the frontend ever sees
@@ -44,43 +45,7 @@ function mapWardrobeCategory(item: {
   display_name?: string | null
   layer_role?: string | null
 }) {
-  const explicitCategory = item.category?.trim().toLowerCase()
-  if (
-    explicitCategory === 'top' ||
-    explicitCategory === 'bottom' ||
-    explicitCategory === 'outerwear' ||
-    explicitCategory === 'footwear' ||
-    explicitCategory === 'accessory'
-  ) {
-    return explicitCategory
-  }
-
-  const text = [
-    item.subcategory,
-    item.display_name,
-    item.layer_role,
-  ]
-    .filter(Boolean)
-    .join(' ')
-    .toLowerCase()
-
-  if (text.includes('shoe') || text.includes('footwear') || text.includes('sneaker') || text.includes('boot') || text.includes('loafer')) {
-    return 'footwear'
-  }
-
-  if (text.includes('outerwear') || text.includes('outer wear') || text.includes('outer_layer') || text.includes('outer layer') || text.includes('jacket') || text.includes('coat') || text.includes('blazer')) {
-    return 'outerwear'
-  }
-
-  if (text.includes('bottom') || text.includes('pant') || text.includes('trouser') || text.includes('skirt') || text.includes('jean') || text.includes('short')) {
-    return 'bottom'
-  }
-
-  if (text.includes('top') || text.includes('shirt') || text.includes('blouse') || text.includes('tee') || text.includes('sweater')) {
-    return 'top'
-  }
-
-  return 'accessory'
+  return normalizeWardrobeItem(item).category
 }
 
 // ---------------------------------------------------------------------------
@@ -146,14 +111,14 @@ export async function getRankedPieces(
 
   const userVector = dna.vector as Record<string, number>
 
-  // 2. Fetch all wardrobe items
-  const { data: items, error: itemsError } = await supabase
-    .from('wardrobe_items')
-    .select('id, category, subcategory, image_url, display_name, layer_role, style_tags')
-
-  if (itemsError || !items) {
-    throw new Error('Could not fetch wardrobe items')
-  }
+  // 2. Prefer the database category filter, with a legacy fallback query.
+  const [primaryResult, legacyResult] = await Promise.all([
+    supabase.from('wardrobe_items').select('id, category, subcategory, image_url, display_name, layer_role, style_tags').eq('category', category),
+    supabase.from('wardrobe_items').select('id, category, subcategory, image_url, display_name, layer_role, style_tags').or('category.is.null,category.eq.'),
+  ])
+  const itemsError = primaryResult.error ?? legacyResult.error
+  const items = [...(primaryResult.data ?? []), ...(legacyResult.data ?? [])]
+  if (itemsError) throw new Error('Could not fetch wardrobe items')
 
   // 3. Filter to requested category and score; dedupe by stable item id.
   const seenIds = new Set<string>()
@@ -296,6 +261,26 @@ export async function searchPieces(
 // ---------------------------------------------------------------------------
 // saveWardrobeSelection — unchanged, single atomic write
 // ---------------------------------------------------------------------------
+
+export type OrphanedWardrobeItemsReport = {
+  total: number
+  byUser: Record<string, number>
+}
+
+export async function findOrphanedWardrobeItems(): Promise<OrphanedWardrobeItemsReport> {
+  const supabase = await createClient()
+  const { data, error } = await supabase.from('wardrobe_items').select('id, layer_role, user_wardrobe_items(user_id)')
+  if (error || !data) throw new Error('Could not inspect wardrobe items')
+  const validRoles = new Set(['base_layer', 'bottom', 'footwear', 'outerwear', 'accessory'])
+  const byUser: Record<string, number> = {}
+  let total = 0
+  for (const row of data as Array<{ layer_role: string | null; user_wardrobe_items: Array<{ user_id: string }> | null }>) {
+    if (row.layer_role && validRoles.has(row.layer_role)) continue
+    total += 1
+    for (const link of row.user_wardrobe_items ?? []) byUser[link.user_id] = (byUser[link.user_id] ?? 0) + 1
+  }
+  return { total, byUser }
+}
 
 export async function saveWardrobeSelection(itemIds: string[]) {
   const supabase = await createClient()

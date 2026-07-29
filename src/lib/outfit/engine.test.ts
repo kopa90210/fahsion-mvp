@@ -13,6 +13,7 @@ import {
   type WardrobeItem,
 } from './engine'
 import type { StyleVector } from '@/src/lib/quiz/scoring'
+import { normalizeWardrobeItem } from '@/src/lib/wardrobe/normalize'
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -221,5 +222,20 @@ describe('recommendOutfits', () => {
     // No footwear → no valid outfits
     const noShoes = WARDROBE.filter((i) => i.layer_role !== 'footwear')
     expect(recommendOutfits(noShoes, DNA)).toHaveLength(0)
+  })
+})
+
+
+describe('normalized wardrobe roles', () => {
+  it('includes a valid-category item whose stored layer_role is null', () => {
+    const raw = { category: 'top', subcategory: 'shirt', display_name: 'Tee', layer_role: null }
+    const normalized = normalizeWardrobeItem(raw)
+    const results = recommendOutfits([
+      item('tee', normalized.layer_role, { minimal: 0.8 }),
+      item('pants', 'bottom', { minimal: 0.8 }),
+      item('shoes', 'footwear', { minimal: 0.8 }),
+    ], DNA, { topN: 1 })
+    expect(results).toHaveLength(1)
+    expect(results[0].items.map((i) => i.id)).toContain('tee')
   })
 })

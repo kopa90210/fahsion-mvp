@@ -15,7 +15,7 @@ export default async function OutfitCalibrationPage() {
 
   const outfits = await getCalibrationOutfits()
 
-  if (outfits.length !== 3) {
+  if (outfits.length === 0) {
     return (
       <main className="min-h-screen bg-[#f7f4ef] px-4 py-10 text-[#1d1b18] sm:px-6">
         <div className="mx-auto flex min-h-[70vh] max-w-xl flex-col items-center justify-center text-center">

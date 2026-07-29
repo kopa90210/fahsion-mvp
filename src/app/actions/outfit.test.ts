@@ -96,6 +96,7 @@ vi.mock('@/src/lib/supabase/server', () => ({
 // ---------------------------------------------------------------------------
 
 const {
+  getCalibrationOutfits,
   getDailyOutfit,
   shouldShowOutfitCalibration,
   submitOutfitFeedback,
@@ -179,10 +180,7 @@ describe('shouldShowOutfitCalibration', () => {
   it('returns false when has_completed_calibration is true, regardless of item count', async () => {
     mockAuthenticatedUser()
 
-    // DNA exists
     mockTable('fashion_dna', { vector: DNA })
-
-    // Provide plenty of items (3 required roles + extras)
     mockTable('user_wardrobe_items', [
       {
         wardrobe_items: {
@@ -221,12 +219,95 @@ describe('shouldShowOutfitCalibration', () => {
         },
       },
     ])
-
-    // User has already completed calibration
     mockTable('users', { has_completed_calibration: true })
 
     const result = await shouldShowOutfitCalibration()
     expect(result).toBe(false)
+  })
+
+  it('returns true when at least one valid outfit can be generated', async () => {
+    mockAuthenticatedUser()
+    mockTable('fashion_dna', { vector: DNA })
+    mockTable('user_wardrobe_items', [
+      {
+        wardrobe_items: {
+          id: 'tee-1', display_name: 'Tee', image_url: null,
+          layer_role: 'base_layer', style_tags: { minimal: 0.9 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'chino-1', display_name: 'Chinos', image_url: null,
+          layer_role: 'bottom', style_tags: { minimal: 0.7 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'sneaker-1', display_name: 'Sneakers', image_url: null,
+          layer_role: 'footwear', style_tags: { minimal: 0.8 },
+        },
+      },
+    ])
+    mockTable('users', { has_completed_calibration: false })
+
+    const result = await shouldShowOutfitCalibration()
+    expect(result).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// getCalibrationOutfits
+// ---------------------------------------------------------------------------
+
+describe('getCalibrationOutfits', () => {
+  it('returns up to three calibration outfits when the wardrobe can support them', async () => {
+    mockAuthenticatedUser()
+    mockTable('fashion_dna', { vector: DNA })
+    mockTable('user_wardrobe_items', [
+      {
+        wardrobe_items: {
+          id: 'tee-1', display_name: 'Tee', image_url: null,
+          layer_role: 'base_layer', style_tags: { minimal: 0.9 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'tee-2', display_name: 'Button-up', image_url: null,
+          layer_role: 'base_layer', style_tags: { formal: 0.8 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'chino-1', display_name: 'Chinos', image_url: null,
+          layer_role: 'bottom', style_tags: { minimal: 0.7 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'trouser-1', display_name: 'Trousers', image_url: null,
+          layer_role: 'bottom', style_tags: { formal: 0.9 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'sneaker-1', display_name: 'Sneakers', image_url: null,
+          layer_role: 'footwear', style_tags: { minimal: 0.8 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'boot-1', display_name: 'Boots', image_url: null,
+          layer_role: 'footwear', style_tags: { formal: 0.8 },
+        },
+      },
+    ])
+    mockTable('users', { has_completed_calibration: false })
+    mockTable('outfits', { id: 'outfit-1' })
+
+    const result = await getCalibrationOutfits()
+
+    expect(result).toHaveLength(3)
+    expect(insertCalls.outfits).toHaveLength(3)
   })
 })
 

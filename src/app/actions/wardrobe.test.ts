@@ -27,6 +27,7 @@ function createQueryBuilder(tableName: string) {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
+    or: vi.fn().mockReturnThis(),
     single: vi.fn().mockImplementation(() => response()),
     insert: vi.fn().mockReturnThis(),
     upsert: vi.fn().mockImplementation((payload: unknown) => {
@@ -55,7 +56,7 @@ vi.mock('@/src/lib/supabase/server', () => ({
 // Import functions under test
 // ---------------------------------------------------------------------------
 
-const { getCuratedPieces, getRankedPieces, searchPieces, saveWardrobeSelection } = await import(
+const { getCuratedPieces, getRankedPieces, searchPieces, saveWardrobeSelection, findOrphanedWardrobeItems } = await import(
   '@/src/app/actions/wardrobe'
 )
 
@@ -307,5 +308,23 @@ describe('getCuratedPieces', () => {
     }
 
     expect(result['top'].length).toBe(5)
+  })
+})
+
+
+describe('findOrphanedWardrobeItems', () => {
+  it('reports invalid roles and cross-references only affected users', async () => {
+    tableResponses['wardrobe_items'] = {
+      data: [
+        { id: 'bad-1', layer_role: null, user_wardrobe_items: [{ user_id: 'u1' }, { user_id: 'u2' }] },
+        { id: 'bad-2', layer_role: 'not-a-role', user_wardrobe_items: [{ user_id: 'u1' }] },
+        { id: 'good-1', layer_role: 'bottom', user_wardrobe_items: [{ user_id: 'u2' }] },
+      ],
+      error: null,
+    }
+    await expect(findOrphanedWardrobeItems()).resolves.toEqual({
+      total: 2,
+      byUser: { u1: 2, u2: 1 },
+    })
   })
 })

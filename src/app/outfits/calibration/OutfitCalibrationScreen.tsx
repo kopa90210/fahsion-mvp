@@ -39,11 +39,9 @@ export default function OutfitCalibrationScreen({
   feedbackCount: number
 }) {
   const router = useRouter()
-  // const [currentIndex, setCurrentIndex] = useState(0)
-  const [round, setRound] = useState(1) // 1, 2, or 3
+  const [outfitIndex, setOutfitIndex] = useState(0)
   const [visible, setVisible] = useState(true)
   const [lastFeedback, setLastFeedback] = useState<boolean | null>(null)
-  // const [vector, setVector] = useState(outfits[0].vector)
   const [currentOutfit, setCurrentOutfit] = useState(outfits[0])
   const [vector, setVector] = useState(outfits[0].vector)
   const [isFinishing, setIsFinishing] = useState(false)
@@ -53,8 +51,9 @@ export default function OutfitCalibrationScreen({
   const [, startTransition] = useTransition()
   const feedbackQueue = useRef<Promise<unknown>>(Promise.resolve())
 
-  // const outfit = outfits[currentIndex]
   const outfit = currentOutfit
+  const totalOutfits = outfits.length
+  const progressLabel = `${Math.min(outfitIndex + 1, totalOutfits)} of ${totalOutfits}`
 
   // Derive signals from the (potentially optimistically updated) vector
   const signals = useMemo(() => vectorToSignals(vector), [vector])
@@ -80,9 +79,7 @@ export default function OutfitCalibrationScreen({
     if (!visible || isFinishing) return
 
     const activeOutfit = outfit
-    // const activeIndex = currentIndex
-    // const isFinalOutfit = activeIndex === outfits.length - 1
-    const isFinalOutfit = round === 3
+    const isFinalOutfit = outfitIndex >= totalOutfits - 1
     const changedTags = getChangedTags(activeOutfit)
 
     setLastFeedback(liked)
@@ -103,26 +100,27 @@ export default function OutfitCalibrationScreen({
 
     window.setTimeout(() => {
       if (!isFinalOutfit) {
-        // setCurrentIndex(activeIndex + 1)
-        // setLastFeedback(null)
-        // setVisible(true)
-        // return
-
-         startTransition(async () => {
-         try {
+        startTransition(async () => {
+          try {
             const result = await feedbackPromise
-            if (result.nextOutfit) {
-              setCurrentOutfit(result.nextOutfit)           
-                 setVector(result.vector)
-           }
-         } finally {
-            setRound((r) => r + 1)
-           setLastFeedback(null)
-           setVisible(true)
+            const nextIndex = outfitIndex + 1
+            const nextOutfit = result.nextOutfit ?? outfits[nextIndex]
+
+            if (nextOutfit) {
+              setCurrentOutfit(nextOutfit)
+              setOutfitIndex(nextIndex)
+            } else {
+              setIsFinishing(true)
+              setVisible(false)
+            }
+
+            setVector(result.vector)
+          } finally {
+            setLastFeedback(null)
+            setVisible(true)
           }
         })
         return
-
       }
 
       setIsFinishing(true)
@@ -168,7 +166,7 @@ export default function OutfitCalibrationScreen({
                 Skip for now
               </button>
               <Badge variant="outline" className="border-[#b9aa99] bg-white/45 text-[#4f463d]">
-                {round} of 3
+                {progressLabel}
               </Badge>
             </div>
           </div>
@@ -186,7 +184,7 @@ export default function OutfitCalibrationScreen({
                   <CardHeader className="gap-2">
                     <CardTitle className="text-xl">Would you wear this?</CardTitle>
                     <CardDescription>
-                      React to three generated outfits before your first daily recommendation.
+                      React to the generated outfits before your first daily recommendation.
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-5">

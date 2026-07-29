@@ -10,6 +10,7 @@ import {
 } from '@/src/lib/outfit/engine'
 import type { StyleVector } from '@/src/lib/quiz/scoring'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { normalizeWardrobeItem } from '@/src/lib/wardrobe/normalize'
 
 export type DailyOutfit = Outfit & {
   id: string
@@ -36,6 +37,8 @@ type WardrobeJoinItem = {
   id: string
   display_name: string
   image_url: string | null
+  category: string | null
+  subcategory: string | null
   layer_role: string | null
   style_tags: Partial<StyleVector> | null
 }
@@ -73,6 +76,24 @@ function getChangedTags(items: Array<{ style_tags: Record<string, number> }>) {
           .map(([tag]) => tag),
       ),
     ),
+  )
+}
+
+function pickDiverseCalibrationCandidate(
+  candidates: Array<{ items: Array<{ id: string }> }>,
+  excludeKeys: Set<string>,
+  currentItemIds: string[] = [],
+) {
+  const currentIds = new Set(currentItemIds)
+
+  return (
+    candidates.find((candidate) => {
+      const key = outfitKey(candidate.items)
+      if (excludeKeys.has(key)) return false
+      return !candidate.items.some((item) => currentIds.has(item.id))
+    }) ??
+    candidates.find((candidate) => !excludeKeys.has(outfitKey(candidate.items))) ??
+    candidates[0]
   )
 }
 
@@ -125,6 +146,8 @@ async function fetchWardrobeItems(
         id,
         display_name,
         image_url,
+        category,
+        subcategory,
         layer_role,
         style_tags
       )
@@ -137,23 +160,24 @@ async function fetchWardrobeItems(
     throw new Error('Could not fetch wardrobe items')
   }
 
-  return (rows as UserWardrobeJoinRow[])
-    .map((row) =>
-      Array.isArray(row.wardrobe_items)
-        ? row.wardrobe_items[0]
-        : row.wardrobe_items,
-    )
-    .filter(
-      (item): item is NonNullable<typeof item> =>
-        item !== null && item.layer_role !== null,
-    )
-    .map((item) => ({
+  const normalizedRows = (rows as UserWardrobeJoinRow[])
+    .map((row) => Array.isArray(row.wardrobe_items) ? row.wardrobe_items[0] : row.wardrobe_items)
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+
+  let excludedCount = 0
+  const items = normalizedRows.map((item) => {
+    const normalized = normalizeWardrobeItem(item)
+    if (!normalized.layer_role) excludedCount += 1
+    return {
       id: item.id,
       display_name: item.display_name,
       image_url: item.image_url ?? null,
-      layer_role: item.layer_role as LayerRole,
+      layer_role: normalized.layer_role as LayerRole,
       style_tags: (item.style_tags as Partial<StyleVector>) ?? {},
-    }))
+    }
+  })
+  if (excludedCount > 0) console.warn('outfit action - excluded wardrobe items with unmapped layer_role:', excludedCount)
+  return items
 }
 
 async function getUserDnaAndWardrobe() {
@@ -204,7 +228,7 @@ export async function shouldShowOutfitCalibration(): Promise<boolean> {
     return false
   }
 
-  return recommendOutfits(items, dna, { topN: 5 }).length >= 3
+  return recommendOutfits(items, dna, { topN: 3 }).length >= 1
 }
 
 export async function getCalibrationOutfits(): Promise<CalibrationOutfit[]> {
@@ -220,30 +244,33 @@ export async function getCalibrationOutfits(): Promise<CalibrationOutfit[]> {
     return []
   }
 
-  const candidates = recommendOutfits(items, dna, { topN: 5 })
-  if (candidates.length < 3) {
+  const candidates = recommendOutfits(items, dna, { topN: 6 })
+  if (candidates.length === 0) {
     return []
   }
 
-  const first = candidates[0]
-  const { data: saved, error: outfitError } = await supabase
-    .from('outfits')
-    .insert({ user_id: userId, item_ids: first.items.map((item) => item.id) })
-    .select('id')
-    .single()
+  const savedOutfits: CalibrationOutfit[] = []
 
-  if (outfitError || !saved) {
-    throw new Error(`Failed to save calibration outfit: ${outfitError?.message ?? 'unknown error'}`)
-  }
+  for (const candidate of candidates.slice(0, 3)) {
+    const { data: saved, error: outfitError } = await supabase
+      .from('outfits')
+      .insert({ user_id: userId, item_ids: candidate.items.map((item) => item.id) })
+      .select('id')
+      .single()
 
-  return [
-    {
-      ...first,
+    if (outfitError || !saved) {
+      throw new Error(`Failed to save calibration outfit: ${outfitError?.message ?? 'unknown error'}`)
+    }
+
+    savedOutfits.push({
+      ...candidate,
       id: saved.id,
       vector: dna,
-      reasons: buildReasons(first, dna),
-    },
-  ]
+      reasons: buildReasons(candidate, dna),
+    })
+  }
+
+  return savedOutfits
 }
 
 export async function getDailyOutfit(): Promise<DailyOutfit | null> {
@@ -389,10 +416,8 @@ async function applyOutfitFeedback(
   if (source === 'calibration' && !completeCalibration) {
     const excludeKeys = await getShownOutfitKeys(supabase, userId)
     const wardrobeItems = await fetchWardrobeItems(supabase, userId)
-    const candidates = recommendOutfits(wardrobeItems, nextVector, { topN: 10 })
-    const picked =
-      candidates.find((candidate) => !excludeKeys.has(outfitKey(candidate.items))) ??
-      candidates[0]
+    const candidates = recommendOutfits(wardrobeItems, nextVector, { topN: 8 })
+    const picked = pickDiverseCalibrationCandidate(candidates, excludeKeys, itemIds)
 
     if (picked) {
       const { data: saved } = await supabase

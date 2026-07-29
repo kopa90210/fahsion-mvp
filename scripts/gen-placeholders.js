@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require('fs');
 const missing = ['q2-clean','q2-eclectic','q3-athleisure','q3-linen','q3-smart','q3-denim','q4-mono','q4-earth','q4-navy','q4-neon','q5-tailored','q5-graphic','q5-raw','q5-embroidery'];
 const gradients = {

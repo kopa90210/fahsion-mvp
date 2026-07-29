@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useRouter } from 'next/navigation'
 import Image from 'next/image'
@@ -20,7 +20,6 @@ export default function PieceSelectionScreen() {
   const [currentStepIndex, setCurrentStepIndex] = useState(0)
   const [selections, setSelections] = useState<Record<string, Set<string>>>({})
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [, startTransition] = useTransition()
 
   // Per-step data state
   const [itemsByCategory, setItemsByCategory] = useState<Record<string, CuratedItem[]>>({})
@@ -34,14 +33,16 @@ export default function PieceSelectionScreen() {
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchResults, setSearchResults] = useState<CuratedItem[]>([])
-  const [isSearching, setIsSearching] = useState(false)
-  const searchDebounceRef = useRef<NodeJS.Timeout | null>(null)
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const currentStep = SELECTION_STEPS[currentStepIndex]
   const currentCategory = currentStep.category
 
   const items = itemsByCategory[currentCategory] ?? []
-  const currentSelectedIds = selections[currentCategory] ?? new Set<string>()
+  const currentSelectedIds = useMemo(
+    () => selections[currentCategory] ?? new Set<string>(),
+    [selections, currentCategory],
+  )
   const selectedCount = currentSelectedIds.size
 
   const isStepValid = currentStep.required
@@ -81,7 +82,11 @@ export default function PieceSelectionScreen() {
   }, [])
 
   useEffect(() => {
-    loadStepData(currentCategory)
+    const timer = window.setTimeout(() => {
+      void loadStepData(currentCategory)
+    }, 0)
+
+    return () => window.clearTimeout(timer)
   }, [currentCategory, loadStepData])
 
   // Load next batch ("Show more")
@@ -118,11 +123,9 @@ export default function PieceSelectionScreen() {
 
     if (!val.trim()) {
       setSearchResults([])
-      setIsSearching(false)
       return
     }
 
-    setIsSearching(true)
     searchDebounceRef.current = setTimeout(async () => {
       try {
         const results = await searchPieces(currentCategory, val)
@@ -136,8 +139,6 @@ export default function PieceSelectionScreen() {
       } catch (err) {
         console.error('Search error:', err)
         setSearchResults([])
-      } finally {
-        setIsSearching(false)
       }
     }, 300)
   }
@@ -216,7 +217,6 @@ export default function PieceSelectionScreen() {
   }, [rawDisplayItems, currentSelectedIds])
   // Submission screen ("Building your wardrobe...")
   if (isSubmitting) {
-    const allItems = items // or selected list
     return (
       <div className="flex min-h-screen w-full flex-col items-center justify-center bg-[#070708] px-6 text-white overflow-hidden">
         <motion.div
@@ -379,7 +379,6 @@ export default function PieceSelectionScreen() {
                 <div className="relative">
                   <div className="flex gap-4 overflow-x-auto pb-4 pt-1 pr-14 snap-x snap-mandatory scrollbar-none">
                   {displayItems.map((item, index) => {
-                    const isSelected = currentSelectedIds.has(item.id)
                     return (
                       <motion.div
                         key={item.id}

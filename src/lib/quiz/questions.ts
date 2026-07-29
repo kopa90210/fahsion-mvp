@@ -1,5 +1,3 @@
-import type { QuizQuestion } from './scoring';
-
 /**
  * Static quiz data — 5 questions × 4 image options.
  *

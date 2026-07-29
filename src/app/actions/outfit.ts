@@ -80,7 +80,7 @@ function getChangedTags(items: Array<{ style_tags: Record<string, number> }>) {
 }
 
 function pickDiverseCalibrationCandidate(
-  candidates: Array<{ items: Array<{ id: string }> }>,
+  candidates: Outfit[],
   excludeKeys: Set<string>,
   currentItemIds: string[] = [],
 ) {

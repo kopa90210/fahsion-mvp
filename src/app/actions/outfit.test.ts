@@ -46,6 +46,12 @@ function createQueryBuilder(tableName: string) {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
+    gte: vi.fn().mockReturnThis(),
+    lte: vi.fn().mockReturnThis(),
+    gt: vi.fn().mockReturnThis(),
+    lt: vi.fn().mockReturnThis(),
+    order: vi.fn().mockReturnThis(),
+    limit: vi.fn().mockReturnThis(),
     single: vi.fn().mockImplementation(() => response()),
     insert: vi.fn().mockImplementation((payload: unknown) => {
       if (!insertCalls[tableName]) insertCalls[tableName] = []

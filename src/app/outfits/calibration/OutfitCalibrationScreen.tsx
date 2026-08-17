@@ -31,7 +31,6 @@ function formatRole(role: string) {
 
 export default function OutfitCalibrationScreen({
   outfits,
-  initialSignals: _initialSignals,
   feedbackCount,
 }: {
   outfits: CalibrationOutfit[]

@@ -363,7 +363,7 @@ export async function getCuratedPieces(): Promise<Record<string, CuratedItem[]>>
       grouped[mappedCat] = []
     }
 
-    if (grouped[mappedCat].length < 5) {
+    if (grouped[mappedCat].length < 10) {
       grouped[mappedCat].push({
         id: item.id,
         category: mappedCat,

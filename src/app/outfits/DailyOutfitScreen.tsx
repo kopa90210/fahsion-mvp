@@ -27,7 +27,6 @@ function formatRole(role: string) {
 
 export default function DailyOutfitScreen({
   outfit,
-  initialSignals: _initialSignals,
   feedbackCount,
 }: {
   outfit: DailyOutfit

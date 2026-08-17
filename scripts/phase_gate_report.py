@@ -54,6 +54,37 @@ def generate_report(supabase: Any) -> dict[str, Any]:
         (calibration_likes / calibration_count * 100) if calibration_count > 0 else 0.0
     )
 
+    outfit_source_metrics: dict[str, dict[str, float | int]] = {}
+    outfit_ids = sorted({f.get("outfit_id") for f in feedback_7d if f.get("outfit_id")})
+    if outfit_ids:
+        try:
+            outfits_response = (
+                supabase.table("outfits")
+                .select("id, source")
+                .in_("id", outfit_ids)
+                .execute()
+            )
+            outfit_sources = {
+                row.get("id"): row.get("source")
+                for row in (outfits_response.data or [])
+                if row.get("id") and row.get("source")
+            }
+            source_buckets: dict[str, list[dict[str, Any]]] = {}
+            for feedback in feedback_7d:
+                outfit_source = outfit_sources.get(feedback.get("outfit_id"))
+                if outfit_source:
+                    source_buckets.setdefault(outfit_source, []).append(feedback)
+
+            for outfit_source, swipes in sorted(source_buckets.items()):
+                swipe_count = len(swipes)
+                like_count = sum(1 for swipe in swipes if swipe.get("liked"))
+                outfit_source_metrics[outfit_source] = {
+                    "count": swipe_count,
+                    "like_rate": (like_count / swipe_count * 100) if swipe_count else 0.0,
+                }
+        except Exception as exc:
+            print(f"Warning: could not calculate outfit source metrics: {exc}", file=sys.stderr)
+
     # 2. Signal-quality metrics (active users & avg swipes/user for 7d)
     active_user_ids = {f.get("user_id") for f in feedback_7d if f.get("user_id")}
     active_users_count = len(active_user_ids)
@@ -129,6 +160,7 @@ def generate_report(supabase: Any) -> dict[str, Any]:
         "d1_return_rate": d1_return_rate,
         "active_users": active_users_count,
         "avg_swipes_per_user": avg_swipes_per_user,
+        "outfit_source_metrics": outfit_source_metrics,
     }
 
 
@@ -152,6 +184,13 @@ def main() -> int:
         print(f"Calibration like rate: {report['calibration_like_rate']:.0f}% ({report['calibration_count']} swipes)")
         print(f"D1 return rate: {report['d1_return_rate']:.0f}%")
         print(f"Active users (7d): {report['active_users']}, avg swipes/user: {report['avg_swipes_per_user']:.1f}")
+        print("Outfit source like rate (7d):")
+        source_metrics = report["outfit_source_metrics"]
+        if source_metrics:
+            for outfit_source, metrics in source_metrics.items():
+                print(f"  {outfit_source}: {metrics['like_rate']:.0f}% ({metrics['count']} swipes)")
+        else:
+            print("  No source-tagged swipes")
 
         return 0
     except Exception as exc:

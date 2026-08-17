@@ -4,6 +4,7 @@ import { createClient } from '@/src/lib/supabase/server'
 import {
   recommendOutfits,
   outfitKey,
+  scoreOutfit,
   type Outfit,
   type WardrobeItem,
   type LayerRole,
@@ -11,6 +12,7 @@ import {
 import type { StyleVector } from '@/src/lib/quiz/scoring'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeWardrobeItem } from '@/src/lib/wardrobe/normalize'
+import { getChangedTags } from '@/src/lib/outfit/feedback-helpers'
 
 export type DailyOutfit = Outfit & {
   id: string
@@ -47,6 +49,12 @@ type UserWardrobeJoinRow = {
   wardrobe_items: WardrobeJoinItem | WardrobeJoinItem[] | null
 }
 
+type StoredDailyOutfitRow = {
+  id: string
+  item_ids: string[] | null
+  reasoning: string[] | null
+}
+
 function clampStyleWeight(value: number) {
   return Math.min(1, Math.max(0, Math.round(value * 100) / 100))
 }
@@ -67,17 +75,54 @@ function buildReasons(outfit: Outfit, dna: StyleVector) {
     .map(([tag]) => `because you liked ${STYLE_LABELS[tag] ?? tag.replaceAll('_', ' ')}`)
 }
 
-function getChangedTags(items: Array<{ style_tags: Record<string, number> }>) {
-  return Array.from(
-    new Set(
-      items.flatMap((item) =>
-        Object.entries(item.style_tags ?? {})
-          .filter(([, weight]) => typeof weight === 'number' && weight > 0)
-          .map(([tag]) => tag),
-      ),
-    ),
-  )
+function resolveStoredDailyOutfit(
+  stored: StoredDailyOutfitRow,
+  items: WardrobeItem[],
+  dna: StyleVector,
+): DailyOutfit | null {
+  if (!Array.isArray(stored.item_ids)) return null
+
+  const itemsById = new Map(items.map((item) => [item.id, item]))
+  const resolvedItems = stored.item_ids.map((id) => itemsById.get(id))
+
+  if (resolvedItems.some((item) => !item)) {
+    return null
+  }
+
+  const outfitItems = resolvedItems as WardrobeItem[]
+  return {
+    id: stored.id,
+    items: outfitItems,
+    score: scoreOutfit(outfitItems, dna),
+    vector: dna,
+    reasons: Array.isArray(stored.reasoning) ? stored.reasoning : [],
+  }
 }
+
+async function getStoredDailyOutfit(
+  supabase: SupabaseClient,
+  userId: string,
+  items: WardrobeItem[],
+  dna: StyleVector,
+  startOfDay: Date,
+) {
+  const { data } = await supabase
+    .from('outfits')
+    .select('id, item_ids, reasoning')
+    .eq('user_id', userId)
+    .in('source', ['daily_ai', 'daily_fallback'])
+    .gte('created_at', startOfDay.toISOString())
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
+
+  if (!data) {
+    return null
+  }
+
+  return resolveStoredDailyOutfit(data as StoredDailyOutfitRow, items, dna)
+}
+
 
 function pickDiverseCalibrationCandidate(
   candidates: Outfit[],
@@ -278,6 +323,14 @@ export async function getDailyOutfit(): Promise<DailyOutfit | null> {
 
   const startOfDay = new Date()
   startOfDay.setHours(0, 0, 0, 0)
+
+  if (process.env.ENABLE_AI_DAILY_OUTFITS === 'true') {
+    const storedOutfit = await getStoredDailyOutfit(supabase, userId, items, dna, startOfDay)
+    if (storedOutfit) {
+      return storedOutfit
+    }
+  }
+
   const excludeKeys = await getShownOutfitKeys(supabase, userId, startOfDay)
 
   const candidates = recommendOutfits(items, dna, { topN: 10 })
@@ -392,7 +445,7 @@ async function applyOutfitFeedback(
 
   const delta = liked ? 0.05 : -0.05
   const currentVector = (dnaRow.vector ?? {}) as StyleVector
-  const changedTags = getChangedTags(items as Array<{ style_tags: Record<string, number> }>)
+  const changedTags = getChangedTags({ items: items as Array<{ style_tags: Record<string, number> }> })
 
   const nextVector: StyleVector = { ...currentVector }
   for (const tag of changedTags) {

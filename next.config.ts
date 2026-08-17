@@ -16,7 +16,7 @@ const nextConfig: NextConfig = {
     ],
   },
   // Allow connections from local network for testing on mobile devices
-  allowedDevOrigins: ["192.168.1.36", "shaking-heading-erased.ngrok-free.dev", "*.ngrok-free.dev"],
+  allowedDevOrigins: ["192.168.137.1", "shaking-heading-erased.ngrok-free.dev", "*.ngrok-free.dev"],
   experimental: {
     serverActions: {
       allowedOrigins: ["*.ngrok-free.dev", "*.ngrok.io", "*.ngrok.app", "localhost:3000"],

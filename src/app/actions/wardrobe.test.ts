@@ -287,7 +287,7 @@ describe('saveWardrobeSelection', () => {
 // ---------------------------------------------------------------------------
 
 describe('getCuratedPieces', () => {
-  it('returns at most 5 items per category', async () => {
+  it('returns at most 10 items per category', async () => {
     mockAuthenticatedUser()
     tableResponses['fashion_dna'] = {
       data: { vector: { minimal: 0.8 } },
@@ -295,8 +295,8 @@ describe('getCuratedPieces', () => {
     }
 
     const items = [
-      ...makeItems('top', 8, 0.9),
-      ...makeItems('bottom', 7, 0.7),
+      ...makeItems('top', 12, 0.9),    // 12 tops → cap trims to 10
+      ...makeItems('bottom', 7, 0.7),  // 7 bottoms → all fit under cap
       ...makeItems('footwear', 3, 0.6),
     ]
     tableResponses['wardrobe_items'] = { data: items, error: null }
@@ -304,10 +304,10 @@ describe('getCuratedPieces', () => {
     const result = await getCuratedPieces()
 
     for (const [, categoryItems] of Object.entries(result)) {
-      expect(categoryItems.length).toBeLessThanOrEqual(5)
+      expect(categoryItems.length).toBeLessThanOrEqual(10)
     }
 
-    expect(result['top'].length).toBe(5)
+    expect(result['top'].length).toBe(10)
   })
 })
 

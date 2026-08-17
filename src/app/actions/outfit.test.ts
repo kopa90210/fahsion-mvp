@@ -24,11 +24,18 @@ let tableResponses: Record<
   { data: unknown; error: unknown }
 > = {}
 
+let tableResponseSequences: Record<
+  string,
+  { data: unknown; error: unknown }[]
+> = {}
+
 /** Track which tables had .insert() called and with what payload. */
 let insertCalls: Record<string, unknown[]> = {}
 
 /** Track which tables had .update() called and with what payload. */
 let updateCalls: Record<string, unknown[]> = {}
+
+let queryBuilders: Array<{ table: string; builder: Record<string, unknown> }> = []
 
 /**
  * Build a chainable mock that mimics the Supabase query builder.
@@ -39,8 +46,13 @@ let updateCalls: Record<string, unknown[]> = {}
  * configured fixture from `tableResponses[tableName]`.
  */
 function createQueryBuilder(tableName: string) {
-  const response = () =>
-    tableResponses[tableName] ?? { data: null, error: null }
+  const response = () => {
+    const sequence = tableResponseSequences[tableName]
+    if (sequence?.length) {
+      return sequence.shift() ?? { data: null, error: null }
+    }
+    return tableResponses[tableName] ?? { data: null, error: null }
+  }
 
   const builder: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
@@ -83,6 +95,7 @@ function createQueryBuilder(tableName: string) {
 
   // Make the builder itself thenable so plain `await` resolves it
   builder.then = (resolve: (v: unknown) => unknown) => resolve(response())
+  queryBuilders.push({ table: tableName, builder })
   return builder
 }
 
@@ -97,6 +110,14 @@ vi.mock('@/src/lib/supabase/server', () => ({
   createClient: vi.fn().mockResolvedValue(mockSupabase),
 }))
 
+vi.mock('@/src/lib/outfit/engine', async (importActual) => {
+  const actual = await importActual<typeof import('@/src/lib/outfit/engine')>()
+  return {
+    ...actual,
+    recommendOutfits: vi.fn(actual.recommendOutfits),
+  }
+})
+
 // ---------------------------------------------------------------------------
 // Import functions under test (after the mock is set up)
 // ---------------------------------------------------------------------------
@@ -108,6 +129,7 @@ const {
   submitOutfitFeedback,
   skipOutfitCalibration,
 } = await import('@/src/app/actions/outfit')
+const outfitEngine = await import('@/src/lib/outfit/engine')
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -119,6 +141,13 @@ const DNA = { minimal: 0.8, streetwear: 0.2, formal: 0.1 }
 /** Convenience to set a Supabase table's mock response. */
 function mockTable(table: string, data: unknown, error: unknown = null) {
   tableResponses[table] = { data, error }
+}
+
+function mockTableSequence(table: string, responses: Array<{ data: unknown; error?: unknown }>) {
+  tableResponseSequences[table] = responses.map((response) => ({
+    data: response.data,
+    error: response.error ?? null,
+  }))
 }
 
 function mockAuthenticatedUser() {
@@ -135,8 +164,11 @@ function mockAuthenticatedUser() {
 beforeEach(() => {
   vi.clearAllMocks()
   tableResponses = {}
+  tableResponseSequences = {}
   insertCalls = {}
   updateCalls = {}
+  queryBuilders = []
+  delete process.env.ENABLE_AI_DAILY_OUTFITS
 })
 
 // ---------------------------------------------------------------------------
@@ -175,6 +207,160 @@ describe('getDailyOutfit', () => {
 
     const result = await getDailyOutfit()
     expect(result).toBeNull()
+  })
+
+  it('returns a pre-generated AI outfit with stored reasons when the feature flag is on', async () => {
+    process.env.ENABLE_AI_DAILY_OUTFITS = 'true'
+    mockAuthenticatedUser()
+    mockTable('fashion_dna', { vector: DNA })
+    mockTable('user_wardrobe_items', [
+      {
+        wardrobe_items: {
+          id: 'tee-1', display_name: 'Tee', image_url: null,
+          layer_role: 'base_layer', style_tags: { minimal: 0.9 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'chino-1', display_name: 'Chinos', image_url: null,
+          layer_role: 'bottom', style_tags: { minimal: 0.7 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'sneaker-1', display_name: 'Sneakers', image_url: null,
+          layer_role: 'footwear', style_tags: { minimal: 0.8 },
+        },
+      },
+    ])
+    mockTable('outfits', {
+      id: 'ai-outfit-1',
+      item_ids: ['tee-1', 'chino-1', 'sneaker-1'],
+      reasoning: ['stored reason one', 'stored reason two'],
+    })
+
+    const result = await getDailyOutfit()
+
+    expect(result?.id).toBe('ai-outfit-1')
+    expect(result?.items.map((item) => item.id)).toEqual(['tee-1', 'chino-1', 'sneaker-1'])
+    expect(result?.reasons).toEqual(['stored reason one', 'stored reason two'])
+    expect(outfitEngine.recommendOutfits).not.toHaveBeenCalled()
+  })
+
+  it('falls through to the live engine when a stored AI outfit references a missing item', async () => {
+    process.env.ENABLE_AI_DAILY_OUTFITS = 'true'
+    mockAuthenticatedUser()
+    mockTable('fashion_dna', { vector: DNA })
+    mockTable('user_wardrobe_items', [
+      {
+        wardrobe_items: {
+          id: 'tee-1', display_name: 'Tee', image_url: null,
+          layer_role: 'base_layer', style_tags: { minimal: 0.9 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'chino-1', display_name: 'Chinos', image_url: null,
+          layer_role: 'bottom', style_tags: { minimal: 0.7 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'sneaker-1', display_name: 'Sneakers', image_url: null,
+          layer_role: 'footwear', style_tags: { minimal: 0.8 },
+        },
+      },
+    ])
+    mockTableSequence('outfits', [
+      {
+        data: {
+          id: 'stale-ai-outfit',
+          item_ids: ['tee-1', 'chino-1', 'deleted-item'],
+          reasoning: ['stale stored reason'],
+        },
+      },
+      { data: [] },
+      { data: { id: 'engine-outfit-1' } },
+    ])
+
+    const result = await getDailyOutfit()
+
+    expect(result?.id).toBe('engine-outfit-1')
+    expect(result?.items.map((item) => item.id)).toEqual(['tee-1', 'chino-1', 'sneaker-1'])
+    expect(outfitEngine.recommendOutfits).toHaveBeenCalled()
+  })
+
+  it('falls through to the live engine when no stored daily AI row exists', async () => {
+    process.env.ENABLE_AI_DAILY_OUTFITS = 'true'
+    mockAuthenticatedUser()
+    mockTable('fashion_dna', { vector: DNA })
+    mockTable('user_wardrobe_items', [
+      {
+        wardrobe_items: {
+          id: 'tee-1', display_name: 'Tee', image_url: null,
+          layer_role: 'base_layer', style_tags: { minimal: 0.9 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'chino-1', display_name: 'Chinos', image_url: null,
+          layer_role: 'bottom', style_tags: { minimal: 0.7 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'sneaker-1', display_name: 'Sneakers', image_url: null,
+          layer_role: 'footwear', style_tags: { minimal: 0.8 },
+        },
+      },
+    ])
+    mockTableSequence('outfits', [
+      { data: null },
+      { data: [] },
+      { data: { id: 'engine-outfit-1' } },
+    ])
+
+    const result = await getDailyOutfit()
+
+    expect(result?.id).toBe('engine-outfit-1')
+    expect(outfitEngine.recommendOutfits).toHaveBeenCalled()
+  })
+
+  it('does not query the AI daily read path when the feature flag is off', async () => {
+    mockAuthenticatedUser()
+    mockTable('fashion_dna', { vector: DNA })
+    mockTable('user_wardrobe_items', [
+      {
+        wardrobe_items: {
+          id: 'tee-1', display_name: 'Tee', image_url: null,
+          layer_role: 'base_layer', style_tags: { minimal: 0.9 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'chino-1', display_name: 'Chinos', image_url: null,
+          layer_role: 'bottom', style_tags: { minimal: 0.7 },
+        },
+      },
+      {
+        wardrobe_items: {
+          id: 'sneaker-1', display_name: 'Sneakers', image_url: null,
+          layer_role: 'footwear', style_tags: { minimal: 0.8 },
+        },
+      },
+    ])
+    mockTableSequence('outfits', [
+      { data: [] },
+      { data: { id: 'engine-outfit-1' } },
+    ])
+
+    const result = await getDailyOutfit()
+    const outfitsSelects = queryBuilders
+      .filter((query) => query.table === 'outfits')
+      .map((query) => query.builder.select as ReturnType<typeof vi.fn>)
+
+    expect(result?.id).toBe('engine-outfit-1')
+    expect(outfitsSelects.some((select) => select.mock.calls.some((call) => call[0] === 'id, item_ids, reasoning'))).toBe(false)
   })
 })
 

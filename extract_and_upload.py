@@ -39,7 +39,7 @@ EXTRACTION_PROMPT = """You are a fashion attribute extractor. Look at this cloth
   "material": {"primary": "", "weights": {"<material>":0.0}},
   "fit": {"weights": {"slim":0.0,"regular":0.0,"relaxed":0.0,"oversized":0.0}},
   "pattern": "solid | striped | checked | printed | textured",
-  "style_tags": {"minimal":0.0,"streetwear":0.0,"smart_casual":0.0,"formal":0.0,"sporty":0.0,"bohemian":0.0},
+  "style_tags": {"minimal":0.0,"streetwear":0.0,"formal":0.0,"bohemian":0.0,"edgy":0.0,"earth_tones":0.0,"smart_casual":0.0,"sporty":0.0},
   "formality_score": 0.0,
   "season_weights": {"spring":0.0,"summer":0.0,"fall":0.0,"winter":0.0},
   "layer_role": "base_layer | mid_layer | outerwear | bottom | footwear | accessory",

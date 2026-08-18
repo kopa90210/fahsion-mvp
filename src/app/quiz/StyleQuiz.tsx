@@ -1,17 +1,19 @@
 'use client'
 
-import { useState, useCallback, useTransition } from 'react'
+import { useState, useCallback, useTransition, useMemo } from 'react'
 import { motion, AnimatePresence, Variants } from 'framer-motion'
 import { QUIZ_QUESTIONS, QUIZ_QUESTIONS_FOR_SCORING } from '@/src/lib/quiz/questions'
 import { computeStyleVector } from '@/src/lib/quiz/scoring'
 import type { QuizAnswer } from '@/src/lib/quiz/scoring'
+import { buildForcedPairQuestion } from '@/src/lib/quiz/buildForcedPair'
 import { submitStyleQuiz } from './actions'
 
 // ---------------------------------------------------------------------------
 // Constants
+// The 11 static questions + 1 dynamic forced-pair = 12 total.
 // ---------------------------------------------------------------------------
 
-const TOTAL_QUESTIONS = QUIZ_QUESTIONS.length
+const TOTAL_QUESTIONS = QUIZ_QUESTIONS.length + 1 // 11 + 1 = 12
 
 // ---------------------------------------------------------------------------
 // Animation variants
@@ -64,8 +66,21 @@ export default function StyleQuiz() {
   const [isPending, startTransition] = useTransition()
   const [imgErrors, setImgErrors] = useState<Set<string>>(new Set())
 
-  const question = QUIZ_QUESTIONS[currentStep]
-  const progress = ((currentStep) / TOTAL_QUESTIONS) * 100
+  // Build the forced-pair question dynamically once all 11 static answers
+  // are in — this re-computes whenever `answers` changes, which is cheap.
+  const forcedPairQuestion = useMemo(
+    () => buildForcedPairQuestion(answers, QUIZ_QUESTIONS),
+    [answers],
+  )
+
+  // The full 12-question sequence: 11 static + 1 dynamic forced-pair.
+  const allQuestions = useMemo(
+    () => [...QUIZ_QUESTIONS, forcedPairQuestion],
+    [forcedPairQuestion],
+  )
+
+  const question = allQuestions[currentStep]
+  const progress = (currentStep / TOTAL_QUESTIONS) * 100
 
   const handleSelect = useCallback(
     (optionId: string) => {
@@ -145,7 +160,7 @@ export default function StyleQuiz() {
               {question.prompt}
             </h2>
 
-            {/* Option grid — 2×2 */}
+            {/* Option grid — 2×2 for 4-option questions, 2×1 for forced-pair */}
             <div className="grid w-full grid-cols-2 gap-3 sm:gap-4">
               {question.options.map((option, i) => {
                 const hasError = imgErrors.has(option.id)

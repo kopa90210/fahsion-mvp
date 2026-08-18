@@ -1,21 +1,33 @@
 /* eslint-disable @typescript-eslint/no-require-imports */
 const fs = require('fs');
-const missing = ['q2-clean','q2-eclectic','q3-athleisure','q3-linen','q3-smart','q3-denim','q4-mono','q4-earth','q4-navy','q4-neon','q5-tailored','q5-graphic','q5-raw','q5-embroidery'];
+const missing = [
+  'q1-minimal', 'q1-streetwear', 'q1-formal', 'q1-bohemian',
+  'q2-dark', 'q2-warm', 'q2-clean', 'q2-eclectic',
+  'q3-athleisure', 'q3-linen', 'q3-smart', 'q3-denim',
+  'q4-mono', 'q4-earth', 'q4-navy', 'q4-neon',
+  'q5-tailored', 'q5-graphic', 'q5-raw', 'q5-embroidery'
+];
 const gradients = {
-  'q2-clean':['#f8f9fa','#e9ecef'],
-  'q2-eclectic':['#ff6b6b','#ffd93d'],
-  'q3-athleisure':['#495057','#adb5bd'],
-  'q3-linen':['#d4a574','#f0e6d3'],
-  'q3-smart':['#2c3e50','#3498db'],
-  'q3-denim':['#1a5276','#5dade2'],
-  'q4-mono':['#1a1a1a','#e0e0e0'],
-  'q4-earth':['#8b4513','#6b8e23'],
-  'q4-navy':['#1a2a4a','#722f37'],
-  'q4-neon':['#ff00ff','#00ff88'],
-  'q5-tailored':['#2c3e50','#95a5a6'],
-  'q5-graphic':['#e74c3c','#f39c12'],
-  'q5-raw':['#1a1a1a','#4a4a4a'],
-  'q5-embroidery':['#8e44ad','#d4a574'],
+  'q1-minimal': ['#f5f5f5', '#e0e0e0'],
+  'q1-streetwear': ['#1a1a2e', '#16213e'],
+  'q1-formal': ['#2c3e50', '#4a6741'],
+  'q1-bohemian': ['#d4a574', '#c2956b'],
+  'q2-dark': ['#0d0d0d', '#2d1f3d'],
+  'q2-warm': ['#8b6914', '#6b8e23'],
+  'q2-clean': ['#f8f9fa', '#e9ecef'],
+  'q2-eclectic': ['#ff6b6b', '#ffd93d'],
+  'q3-athleisure': ['#495057', '#adb5bd'],
+  'q3-linen': ['#d4a574', '#f0e6d3'],
+  'q3-smart': ['#2c3e50', '#3498db'],
+  'q3-denim': ['#1a5276', '#5dade2'],
+  'q4-mono': ['#1a1a1a', '#e0e0e0'],
+  'q4-earth': ['#8b4513', '#6b8e23'],
+  'q4-navy': ['#1a2a4a', '#722f37'],
+  'q4-neon': ['#ff00ff', '#00ff88'],
+  'q5-tailored': ['#2c3e50', '#95a5a6'],
+  'q5-graphic': ['#e74c3c', '#f39c12'],
+  'q5-raw': ['#1a1a1a', '#4a4a4a'],
+  'q5-embroidery': ['#8e44ad', '#d4a574'],
 };
 missing.forEach(name => {
   const [c1, c2] = gradients[name];

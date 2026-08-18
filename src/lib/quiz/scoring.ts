@@ -41,11 +41,17 @@ export interface QuizQuestion {
 
 export const STYLE_DIMENSIONS = [
   'minimal',
+  'casual',
+  'smart_casual',
   'streetwear',
+  'classic',
+  'old_money',
+  'sporty',
+  'relaxed',
+  'vintage',
+  'trend_forward',
   'formal',
-  'bohemian',
   'edgy',
-  'earth_tones',
 ] as const;
 
 export type StyleDimension = (typeof STYLE_DIMENSIONS)[number];
@@ -110,4 +116,55 @@ export function computeStyleVector(
   }
 
   return vector;
+}
+
+// ---------------------------------------------------------------------------
+// Quiz metadata (non-style signals)
+// ---------------------------------------------------------------------------
+
+/**
+ * The user's primary shopping motivation, as selected in Q8.
+ * Mirrors the option IDs used in the question bank — no DB persistence yet.
+ *
+ * TODO: persist shoppingMotivation + riskTolerance to Supabase once the
+ * schema is extended (fashion_dna jsonb can hold them as metadata fields).
+ */
+export type ShoppingMotivation =
+  | 'matches-wardrobe'
+  | 'looks-unique'
+  | 'trending'
+  | 'fits-perfectly'
+  | 'quality-worth-it'
+  | 'price-is-right';
+
+/**
+ * How adventurous the user is with outfit choices, as selected in Q9.
+ */
+export type RiskTolerance =
+  | 'safe-combinations'
+  | 'sometimes-different'
+  | 'love-experimenting'
+  | 'depends-on-mood';
+
+/**
+ * Extract non-style metadata signals from the raw answer list.
+ *
+ * Q8 (shopping-behavior) and Q9 (outfit-risk) carry empty weights and do
+ * not feed the style vector. Their optionId IS the semantic value, so we
+ * can extract it directly without looking up the question bank.
+ *
+ * Returns undefined fields when those questions were not answered.
+ */
+export function extractQuizMetadata(
+  answers: QuizAnswer[],
+): { shoppingMotivation?: ShoppingMotivation; riskTolerance?: RiskTolerance } {
+  const shoppingAnswer = answers.find(
+    (a) => a.questionId === 'shopping-behavior',
+  );
+  const riskAnswer = answers.find((a) => a.questionId === 'outfit-risk');
+
+  return {
+    shoppingMotivation: shoppingAnswer?.optionId as ShoppingMotivation | undefined,
+    riskTolerance: riskAnswer?.optionId as RiskTolerance | undefined,
+  };
 }

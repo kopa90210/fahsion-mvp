@@ -1,10 +1,10 @@
-import { signup } from '../actions'
-import Link from 'next/link'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { signup } from "../actions";
+import Link from "next/link";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 
 export default async function SignupPage(props: {
-  searchParams: Promise<{ error: string }>
+  searchParams: Promise<{ error: string }>;
 }) {
   const searchParams = await props.searchParams;
   return (
@@ -40,12 +40,7 @@ export default async function SignupPage(props: {
                 <label className="sr-only" htmlFor="password">
                   Password
                 </label>
-                <Input
-                  id="password"
-                  name="password"
-                  type="password"
-                  required
-                />
+                <Input id="password" name="password" type="password" required />
               </div>
               <Button type="submit" className="w-full">
                 Sign Up
@@ -58,7 +53,7 @@ export default async function SignupPage(props: {
             )}
           </form>
           <div className="mt-4 text-center text-sm">
-            Already have an account?{' '}
+            Already have an account?{" "}
             <Link href="/login" className="underline">
               Log in
             </Link>
@@ -66,5 +61,5 @@ export default async function SignupPage(props: {
         </div>
       </div>
     </div>
-  )
+  );
 }

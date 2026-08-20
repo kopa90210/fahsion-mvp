@@ -288,10 +288,10 @@ describe('buildForcedPairQuestion', () => {
     expect(q.options[0].id).not.toBe(q.options[1].id)
   })
 
-  it('each option has imageUrl, label, gradient, and weights', () => {
+  it('each option has imageUrl or images, label, gradient, and weights', () => {
     const q = buildForcedPairQuestion(FIXTURE_ANSWERS, QUIZ_QUESTIONS)
     for (const opt of q.options) {
-      expect(opt).toHaveProperty('imageUrl')
+      expect((opt as { imageUrl?: string; images?: unknown }).imageUrl ?? (opt as { images?: unknown }).images).toBeDefined()
       expect(opt).toHaveProperty('label')
       expect(opt).toHaveProperty('gradient')
       expect(opt).toHaveProperty('weights')

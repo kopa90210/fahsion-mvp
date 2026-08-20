@@ -21,12 +21,28 @@ function isValidStyleVector(v: unknown): v is StyleVector {
   return true
 }
 
+import { extractQuizMetadata, type QuizAnswer } from '@/src/lib/quiz/scoring'
+
+const VALID_SHOPPING_MOTIVATIONS = new Set([
+  'matches-wardrobe',
+  'looks-unique',
+  'quality-worth-it',
+  'price-is-right',
+])
+
+const VALID_RISK_TOLERANCES = new Set([
+  'safe-combinations',
+  'sometimes-different',
+  'love-experimenting',
+  'depends-on-mood',
+])
+
 /**
  * Upsert the user's quiz results into the `fashion_dna` table.
  *
  * Called from the client after the quiz is completed and scored.
  */
-export async function submitStyleQuiz(vector: StyleVector) {
+export async function submitStyleQuiz(vector: StyleVector, answers: QuizAnswer[]) {
   const supabase = await createClient()
 
   // Auth gate
@@ -40,15 +56,29 @@ export async function submitStyleQuiz(vector: StyleVector) {
     throw new Error('Invalid style vector')
   }
 
+  // Extract metadata safely server-side
+  const { shoppingMotivation, riskTolerance } = extractQuizMetadata(answers)
+  
+  const payload: Record<string, unknown> = {
+    user_id: authData.user.id,
+    vector,
+    updated_at: new Date().toISOString(),
+  }
+
+  // Validate and conditionally include derived metadata
+  if (shoppingMotivation && VALID_SHOPPING_MOTIVATIONS.has(shoppingMotivation)) {
+    payload.shopping_motivation = shoppingMotivation
+  }
+  
+  if (riskTolerance && VALID_RISK_TOLERANCES.has(riskTolerance)) {
+    payload.risk_tolerance = riskTolerance
+  }
+
   // Upsert into fashion_dna
   const { error } = await supabase
     .from('fashion_dna')
     .upsert(
-      {
-        user_id: authData.user.id,
-        vector,
-        updated_at: new Date().toISOString(),
-      },
+      payload,
       { onConflict: 'user_id' },
     )
 

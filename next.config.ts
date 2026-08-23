@@ -19,6 +19,7 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ["192.168.137.1", "shaking-heading-erased.ngrok-free.dev", "*.ngrok-free.dev"],
   experimental: {
     serverActions: {
+      bodySizeLimit: "10mb",
       allowedOrigins: ["*.ngrok-free.dev", "*.ngrok.io", "*.ngrok.app", "localhost:3000"],
     },
   },

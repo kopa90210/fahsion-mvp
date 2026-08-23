@@ -3,6 +3,14 @@ export type WardrobeCategory = (typeof WARDROBE_CATEGORIES)[number]
 export type WardrobeLayerRole = 'base_layer' | 'bottom' | 'footwear' | 'outerwear' | 'accessory'
 export type NormalizedWardrobeClassification = { category: WardrobeCategory; layer_role: WardrobeLayerRole }
 
+export const SUBCATEGORY_MAP: Partial<Record<WardrobeCategory, readonly string[]>> = {
+  top: ['t-shirt', 'polo', 'button-up', 'sweater'],
+  bottom: ['jeans', 'trousers', 'shorts', 'skirt'],
+  footwear: ['sneakers', 'boots', 'loafers', 'sandals'],
+  outerwear: ['jacket', 'coat', 'blazer'],
+  accessory: ['bag', 'hat', 'jewelry'],
+}
+
 const CATEGORY_TO_ROLE: Record<WardrobeCategory, WardrobeLayerRole> = {
   top: 'base_layer', bottom: 'bottom', footwear: 'footwear', outerwear: 'outerwear', accessory: 'accessory',
 }

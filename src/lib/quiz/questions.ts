@@ -8,28 +8,47 @@
  * `gradient` is a CSS gradient string used as a fallback / overlay
  * on the image card to ensure the label is always readable.
  *
- * Image paths follow the /quiz/q{N}-{slug}.jpg convention.
+ * Image paths:
+ *   - Gender-neutral questions: /quiz/q{N}-{slug}.jpg  (single `imageUrl`)
+ *   - Outfit-photography questions: /quiz/q{N}-{slug}-m.jpg  and
+ *     /quiz/q{N}-{slug}-f.jpg  stored as `images.masculine` / `images.feminine`
  * Missing images fall back to the gradient via the onError handler in StyleQuiz.tsx.
  */
 
-export interface QuizOptionDisplay {
+import type { SingleImageOption, GenderedImageOption } from './imageSet';
+
+/** Base fields shared by every display option. */
+interface QuizOptionBase {
   id: string;
-  imageUrl: string;
   label: string;
   weights: Record<string, number>;
   /** CSS gradient used as card overlay for legibility. */
   gradient: string;
 }
 
+/**
+ * An option that shows a single gender-neutral image.
+ * Used by colour-palette, fit-preference, detail-preference,
+ * shopping-behavior, outfit-risk, and layering-preference.
+ */
+export type QuizOptionDisplay = QuizOptionBase & SingleImageOption;
+
+/**
+ * An option that carries two outfit-photography variants.
+ * Used by everyday-look, going-out-look, work-study-look,
+ * weekend-look, and travel-look.
+ */
+export type GenderedQuizOptionDisplay = QuizOptionBase & GenderedImageOption;
+
 export interface QuizQuestionDisplay {
   id: string;
   prompt: string;
-  options: QuizOptionDisplay[];
+  options: (QuizOptionDisplay | GenderedQuizOptionDisplay)[];
 }
 
 export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
   // -----------------------------------------------------------------------
-  // Q1 — Everyday look
+  // Q1 — Everyday look  [outfit photography — gendered variants]
   // -----------------------------------------------------------------------
   {
     id: 'everyday-look',
@@ -37,28 +56,40 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
     options: [
       {
         id: 'minimal-casual',
-        imageUrl: '/quiz/q1-minimal-casual.jpg',
+        images: {
+          masculine: '/quiz/q1-minimal-casual-m.jpg',
+          feminine:  '/quiz/q1-minimal-casual-f.jpg',
+        },
         label: 'Clean & minimal',
         weights: { minimal: 0.9, casual: 0.4 },
         gradient: 'linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%)',
       },
       {
         id: 'streetwear',
-        imageUrl: '/quiz/q1-streetwear.jpg',
+        images: {
+          masculine: '/quiz/q1-streetwear-m.jpg',
+          feminine:  '/quiz/q1-streetwear-f.jpg',
+        },
         label: 'Bold streetwear',
         weights: { streetwear: 0.9, trend_forward: 0.3 },
         gradient: 'linear-gradient(135deg, #1a1a2e 0%, #16213e 100%)',
       },
       {
         id: 'classic',
-        imageUrl: '/quiz/q1-classic.jpg',
+        images: {
+          masculine: '/quiz/q1-classic-m.jpg',
+          feminine:  '/quiz/q1-classic-f.jpg',
+        },
         label: 'Timeless classic',
         weights: { classic: 0.9, smart_casual: 0.3 },
         gradient: 'linear-gradient(135deg, #2c3e50 0%, #4a5568 100%)',
       },
       {
         id: 'relaxed',
-        imageUrl: '/quiz/q1-relaxed.jpg',
+        images: {
+          masculine: '/quiz/q1-relaxed-m.jpg',
+          feminine:  '/quiz/q1-relaxed-f.jpg',
+        },
         label: 'Easy & relaxed',
         weights: { relaxed: 0.9, casual: 0.4 },
         gradient: 'linear-gradient(135deg, #d4a574 0%, #c2956b 100%)',
@@ -67,7 +98,7 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
   },
 
   // -----------------------------------------------------------------------
-  // Q2 — Going-out look
+  // Q2 — Going-out look  [outfit photography — gendered variants]
   // -----------------------------------------------------------------------
   {
     id: 'going-out-look',
@@ -75,28 +106,40 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
     options: [
       {
         id: 'sharp-tailored',
-        imageUrl: '/quiz/q2-sharp-tailored.jpg',
+        images: {
+          masculine: '/quiz/q2-sharp-tailored-m.jpg',
+          feminine:  '/quiz/q2-sharp-tailored-f.jpg',
+        },
         label: 'Sharp & tailored',
         weights: { formal: 0.85, classic: 0.4 },
         gradient: 'linear-gradient(135deg, #1a2a4a 0%, #2c3e50 100%)',
       },
       {
         id: 'bold-streetwear',
-        imageUrl: '/quiz/q2-bold-streetwear.jpg',
+        images: {
+          masculine: '/quiz/q2-bold-streetwear-m.jpg',
+          feminine:  '/quiz/q2-bold-streetwear-f.jpg',
+        },
         label: 'Bold streetwear',
         weights: { streetwear: 0.85, trend_forward: 0.4 },
         gradient: 'linear-gradient(135deg, #0d0d0d 0%, #2d1f3d 100%)',
       },
       {
         id: 'elevated-casual',
-        imageUrl: '/quiz/q2-elevated-casual.jpg',
+        images: {
+          masculine: '/quiz/q2-elevated-casual-m.jpg',
+          feminine:  '/quiz/q2-elevated-casual-f.jpg',
+        },
         label: 'Elevated casual',
         weights: { smart_casual: 0.8, classic: 0.3 },
         gradient: 'linear-gradient(135deg, #4a4e69 0%, #9a8c98 100%)',
       },
       {
         id: 'edgy',
-        imageUrl: '/quiz/q2-edgy.jpg',
+        images: {
+          masculine: '/quiz/q2-edgy-m.jpg',
+          feminine:  '/quiz/q2-edgy-f.jpg',
+        },
         label: 'Edgy & dark',
         weights: { edgy: 0.9, streetwear: 0.2 },
         gradient: 'linear-gradient(135deg, #1a1a1a 0%, #4a1942 100%)',
@@ -105,7 +148,7 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
   },
 
   // -----------------------------------------------------------------------
-  // Q3 — Work / study look
+  // Q3 — Work / study look  [outfit photography — gendered variants]
   // -----------------------------------------------------------------------
   {
     id: 'work-study-look',
@@ -113,28 +156,40 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
     options: [
       {
         id: 'smart-casual',
-        imageUrl: '/quiz/q3-smart-casual.jpg',
+        images: {
+          masculine: '/quiz/q3-smart-casual-m.jpg',
+          feminine:  '/quiz/q3-smart-casual-f.jpg',
+        },
         label: 'Smart casual',
         weights: { smart_casual: 0.85, classic: 0.3 },
         gradient: 'linear-gradient(135deg, #2c3e50 0%, #3498db 100%)',
       },
       {
         id: 'formal-tailored',
-        imageUrl: '/quiz/q3-formal-tailored.jpg',
+        images: {
+          masculine: '/quiz/q3-formal-tailored-m.jpg',
+          feminine:  '/quiz/q3-formal-tailored-f.jpg',
+        },
         label: 'Formal & tailored',
         weights: { formal: 0.9, old_money: 0.3 },
         gradient: 'linear-gradient(135deg, #1a2a4a 0%, #722f37 100%)',
       },
       {
         id: 'relaxed-casual',
-        imageUrl: '/quiz/q3-relaxed-casual.jpg',
+        images: {
+          masculine: '/quiz/q3-relaxed-casual-m.jpg',
+          feminine:  '/quiz/q3-relaxed-casual-f.jpg',
+        },
         label: 'Relaxed & casual',
         weights: { casual: 0.8, relaxed: 0.4 },
         gradient: 'linear-gradient(135deg, #6b8e23 0%, #d4a574 100%)',
       },
       {
         id: 'streetwear-leaning',
-        imageUrl: '/quiz/q3-streetwear-leaning.jpg',
+        images: {
+          masculine: '/quiz/q3-streetwear-leaning-m.jpg',
+          feminine:  '/quiz/q3-streetwear-leaning-f.jpg',
+        },
         label: 'Streetwear-leaning',
         weights: { streetwear: 0.6, smart_casual: 0.3 },
         gradient: 'linear-gradient(135deg, #495057 0%, #adb5bd 100%)',
@@ -143,7 +198,7 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
   },
 
   // -----------------------------------------------------------------------
-  // Q4 — Weekend look
+  // Q4 — Weekend look  [outfit photography — gendered variants]
   // -----------------------------------------------------------------------
   {
     id: 'weekend-look',
@@ -151,28 +206,40 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
     options: [
       {
         id: 'athleisure',
-        imageUrl: '/quiz/q4-athleisure.jpg',
+        images: {
+          masculine: '/quiz/q4-athleisure-m.jpg',
+          feminine:  '/quiz/q4-athleisure-f.jpg',
+        },
         label: 'Athleisure street',
         weights: { sporty: 0.9, streetwear: 0.3 },
         gradient: 'linear-gradient(135deg, #0f3460 0%, #533483 100%)',
       },
       {
         id: 'relaxed-linen',
-        imageUrl: '/quiz/q4-relaxed-linen.jpg',
+        images: {
+          masculine: '/quiz/q4-relaxed-linen-m.jpg',
+          feminine:  '/quiz/q4-relaxed-linen-f.jpg',
+        },
         label: 'Relaxed linen',
         weights: { relaxed: 0.85, casual: 0.4 },
         gradient: 'linear-gradient(135deg, #d4a574 0%, #f0e6d3 100%)',
       },
       {
         id: 'denim-classic',
-        imageUrl: '/quiz/q4-denim-classic.jpg',
+        images: {
+          masculine: '/quiz/q4-denim-classic-m.jpg',
+          feminine:  '/quiz/q4-denim-classic-f.jpg',
+        },
         label: 'Classic denim',
         weights: { classic: 0.7, casual: 0.4 },
         gradient: 'linear-gradient(135deg, #1a5276 0%, #5dade2 100%)',
       },
       {
         id: 'vintage-inspired',
-        imageUrl: '/quiz/q4-vintage-inspired.jpg',
+        images: {
+          masculine: '/quiz/q4-vintage-inspired-m.jpg',
+          feminine:  '/quiz/q4-vintage-inspired-f.jpg',
+        },
         label: 'Vintage-inspired',
         weights: { vintage: 0.85, relaxed: 0.3 },
         gradient: 'linear-gradient(135deg, #8b4513 0%, #d2691e 100%)',
@@ -409,7 +476,7 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
   },
 
   // -----------------------------------------------------------------------
-  // Q11 — Travel look
+  // Q11 — Travel look  [outfit photography — gendered variants]
   // -----------------------------------------------------------------------
   {
     id: 'travel-look',
@@ -417,28 +484,40 @@ export const QUIZ_QUESTIONS: QuizQuestionDisplay[] = [
     options: [
       {
         id: 'comfortable-practical',
-        imageUrl: '/quiz/q11-comfortable-practical.jpg',
+        images: {
+          masculine: '/quiz/q11-comfortable-practical-m.jpg',
+          feminine:  '/quiz/q11-comfortable-practical-f.jpg',
+        },
         label: 'Comfortable & practical',
         weights: { casual: 0.6, sporty: 0.3 },
         gradient: 'linear-gradient(135deg, #495057 0%, #adb5bd 100%)',
       },
       {
         id: 'effortlessly-stylish',
-        imageUrl: '/quiz/q11-effortlessly-stylish.jpg',
+        images: {
+          masculine: '/quiz/q11-effortlessly-stylish-m.jpg',
+          feminine:  '/quiz/q11-effortlessly-stylish-f.jpg',
+        },
         label: 'Effortlessly stylish',
         weights: { classic: 0.5, smart_casual: 0.3 },
         gradient: 'linear-gradient(135deg, #2c3e50 0%, #3498db 100%)',
       },
       {
         id: 'statement-pieces',
-        imageUrl: '/quiz/q11-statement-pieces.jpg',
+        images: {
+          masculine: '/quiz/q11-statement-pieces-m.jpg',
+          feminine:  '/quiz/q11-statement-pieces-f.jpg',
+        },
         label: 'Statement pieces',
         weights: { trend_forward: 0.7, streetwear: 0.3 },
         gradient: 'linear-gradient(135deg, #e74c3c 0%, #8e44ad 100%)',
       },
       {
         id: 'pack-light-neutral',
-        imageUrl: '/quiz/q11-pack-light-neutral.jpg',
+        images: {
+          masculine: '/quiz/q11-pack-light-neutral-m.jpg',
+          feminine:  '/quiz/q11-pack-light-neutral-f.jpg',
+        },
         label: 'Pack light, stay neutral',
         weights: { minimal: 0.5, classic: 0.2 },
         gradient: 'linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%)',

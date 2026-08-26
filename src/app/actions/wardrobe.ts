@@ -26,6 +26,9 @@ export type UserWardrobeItem = {
   brand: string | null
   display_name: string | null
   image_url: string | null
+  color: unknown
+  fit: unknown
+  style_tags: unknown
   layer_role: string | null
   quantity: number
   added_at: string
@@ -36,6 +39,7 @@ export type WardrobeAttributeUpdates = {
   category?: string | null
   subcategory?: string | null
   brand?: string | null
+  display_name?: string | null
   color?: unknown
   fit?: unknown
   style_tags?: unknown
@@ -59,6 +63,9 @@ function mapUserWardrobeRow(row: Record<string, unknown>): UserWardrobeItem | nu
     brand: (item.brand as string | null) ?? null,
     display_name: (item.display_name as string | null) ?? null,
     image_url: (item.image_url as string | null) ?? null,
+    color: item.color ?? {},
+    fit: item.fit ?? {},
+    style_tags: item.style_tags ?? {},
     layer_role: (item.layer_role as string | null) ?? null,
     quantity: Number(row.quantity ?? 1),
     added_at: String(row.added_at ?? ''),
@@ -69,7 +76,7 @@ function mapUserWardrobeRow(row: Record<string, unknown>): UserWardrobeItem | nu
 export async function getUserWardrobeItems(category?: string, subcategory?: string) {
   const { supabase, userId } = await getAuthenticatedClient()
   let query = supabase.from('user_wardrobe_items')
-    .select('item_id, quantity, added_at, wardrobe_items (id, category, subcategory, brand, display_name, image_url, layer_role, status)')
+    .select('item_id, quantity, added_at, wardrobe_items (id, category, subcategory, brand, display_name, image_url, color, fit, style_tags, layer_role, status)')
     .eq('user_id', userId).eq('wardrobe_items.status', 'confirmed')
     .order('added_at', { ascending: false })
   if (category) query = query.eq('wardrobe_items.category', category)
@@ -83,7 +90,7 @@ export async function getUserWardrobeItems(category?: string, subcategory?: stri
 export async function getUserDraftItems() {
   const { supabase, userId } = await getAuthenticatedClient()
   const { data, error } = await supabase.from('user_wardrobe_items')
-    .select('item_id, quantity, added_at, wardrobe_items (id, category, subcategory, brand, display_name, image_url, layer_role, status)')
+    .select('item_id, quantity, added_at, wardrobe_items (id, category, subcategory, brand, display_name, image_url, color, fit, style_tags, layer_role, status)')
     .eq('user_id', userId).eq('wardrobe_items.status', 'draft').order('added_at', { ascending: false })
   if (error) throw new Error('Could not fetch draft wardrobe items')
   return ((data ?? []) as Record<string, unknown>[]).map(mapUserWardrobeRow)
@@ -103,7 +110,7 @@ async function updateWardrobeStatus(itemId: string, status: 'confirmed' | 'rejec
 export async function updateWardrobeItemAttributes(itemId: string, updates: WardrobeAttributeUpdates) {
   const { supabase } = await getAuthenticatedClient()
   const allowed = Object.fromEntries(Object.entries(updates).filter(([key]) =>
-    ['category', 'subcategory', 'brand', 'color', 'fit', 'style_tags'].includes(key)))
+    ['category', 'subcategory', 'brand', 'display_name', 'color', 'fit', 'style_tags'].includes(key)))
   const classification = ('category' in allowed || 'subcategory' in allowed)
     ? normalizeWardrobeItem({ category: (allowed.category as string | null) ?? null, subcategory: (allowed.subcategory as string | null) ?? null })
     : null
@@ -112,6 +119,18 @@ export async function updateWardrobeItemAttributes(itemId: string, updates: Ward
     ...(classification ? { category: classification.category, layer_role: classification.layer_role } : {}),
   }).eq('id', itemId)
   if (error) throw new Error('Could not update wardrobe item')
+  return { success: true }
+}
+
+export async function replaceWardrobeItemPhoto(itemId: string, imageFile: File) {
+  const { supabase, userId } = await getAuthenticatedClient()
+  const extension = imageFile.name.split('.').pop()?.toLowerCase() || 'jpg'
+  const path = `${userId}/${crypto.randomUUID()}.${extension}`
+  const { error: uploadError } = await supabase.storage.from('wardrobe-images').upload(path, imageFile, { contentType: imageFile.type })
+  if (uploadError) throw new Error('Could not upload wardrobe image')
+  const { data: urlData } = supabase.storage.from('wardrobe-images').getPublicUrl(path)
+  const { error } = await supabase.from('wardrobe_items').update({ image_url: urlData.publicUrl }).eq('id', itemId)
+  if (error) throw new Error('Could not replace wardrobe image')
   return { success: true }
 }
 

@@ -30,6 +30,7 @@ function createQueryBuilder(tableName: string) {
     or: vi.fn().mockReturnThis(),
     single: vi.fn().mockImplementation(() => response()),
     insert: vi.fn().mockReturnThis(),
+    update: vi.fn().mockReturnThis(),
     upsert: vi.fn().mockImplementation((payload: unknown) => {
       if (!upsertCalls[tableName]) upsertCalls[tableName] = []
       upsertCalls[tableName].push(payload)
@@ -46,6 +47,12 @@ const mockSupabase = {
     getUser: vi.fn(),
   },
   from: vi.fn().mockImplementation((table: string) => createQueryBuilder(table)),
+  storage: {
+    from: vi.fn(() => ({
+      upload: vi.fn().mockResolvedValue({ error: null }),
+      getPublicUrl: vi.fn(() => ({ data: { publicUrl: 'https://images.test/replaced.jpg' } })),
+    })),
+  },
 }
 
 vi.mock('@/src/lib/supabase/server', () => ({
@@ -56,7 +63,7 @@ vi.mock('@/src/lib/supabase/server', () => ({
 // Import functions under test
 // ---------------------------------------------------------------------------
 
-const { getCuratedPieces, getRankedPieces, searchPieces, saveWardrobeSelection, findOrphanedWardrobeItems } = await import(
+const { getCuratedPieces, getRankedPieces, searchPieces, saveWardrobeSelection, findOrphanedWardrobeItems, replaceWardrobeItemPhoto, updateWardrobeItemAttributes } = await import(
   '@/src/app/actions/wardrobe'
 )
 
@@ -326,5 +333,20 @@ describe('findOrphanedWardrobeItems', () => {
       total: 2,
       byUser: { u1: 2, u2: 1 },
     })
+  })
+})
+
+describe('replaceWardrobeItemPhoto', () => {
+  it('uploads a replacement and updates only the image URL', async () => {
+    mockAuthenticatedUser()
+    await expect(replaceWardrobeItemPhoto('item-1', new File(['photo'], 'new.jpg', { type: 'image/jpeg' }))).resolves.toEqual({ success: true })
+    expect(mockSupabase.storage.from).toHaveBeenCalledWith('wardrobe-images')
+  })
+})
+
+describe('updateWardrobeItemAttributes', () => {
+  it('updates allowed attributes and derives the normalized layer role', async () => {
+    mockAuthenticatedUser()
+    await expect(updateWardrobeItemAttributes('item-1', { category: 'footwear', subcategory: 'sneakers', brand: 'Acme', color: { primary: 'white' }, fit: {}, style_tags: {} })).resolves.toEqual({ success: true })
   })
 })

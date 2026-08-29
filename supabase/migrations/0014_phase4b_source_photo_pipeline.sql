@@ -6,22 +6,26 @@
 -- - Extensions to wardrobe_items (processing state, crop data, derived image)
 -- - Extensions to extraction_log (stage-aware, source-photo traceability)
 -- - RLS policies for cross-user isolation
--- - Ownership invariant enforcement
+-- - Ownership invariant schema support (RPC enforcement: Gate 3)
 --
 -- MIGRATION REPLAY SAFETY CLASSIFICATION:
--- All operations are idempotent via IF NOT EXISTS or DROP-first pattern.
--- ✅ CREATE TABLE: one-time, table existence guarantees idempotency
+-- CREATE TABLE: intentionally one-time (no IF NOT EXISTS).
+--   Migration runners MUST track applied migrations to prevent re-execution.
+--   Running 0014 twice without tracking will fail: "relation already exists".
 -- ✅ CREATE INDEX: IF NOT EXISTS throughout
 -- ✅ CREATE POLICY: DROP IF EXISTS POLICY first
 -- ✅ ALTER TABLE ADD COLUMN: IF NOT EXISTS throughout
--- Safe for repeated execution.
+-- Safe for tracked/idempotent execution only (not for manual replay).
 
 -- ---------------------------------------------------------------------------
 -- 1. Create source_photos table
 -- ---------------------------------------------------------------------------
+-- FK Design Decision: user_id references public.users (application-owned domain model).
+-- rationale: consistent with existing wardrobe_items.user_id → public.users pattern.
+-- public.users.id itself references auth.users.id; Phase 4B uses application layer.
 create table public.source_photos (
   id                uuid primary key default gen_random_uuid(),
-  user_id           uuid references auth.users on delete cascade not null,
+  user_id           uuid references public.users on delete cascade not null,
   image_url         text not null,
   status            text not null default 'uploading' check (
     status in ('uploading', 'detecting', 'done', 'failed')
@@ -169,7 +173,7 @@ comment on table public.source_photos is
    Status progresses: uploading → detecting → (done | failed).';
 
 comment on table public.extraction_log is
-  'Audit trail for AI extraction stages (detection, isolation, extraction, prettify).
+  'Audit trail for AI extraction stages (detection, crop, background_removal, attribute_extraction, prettify).
    Service-role only; tracks stage, request_id, attempt, and errors.';
 
 comment on column public.wardrobe_items.source_photo_id is
@@ -183,21 +187,21 @@ comment on column public.wardrobe_items.crop_box is
   'Normalized crop coordinates within source photo: {x, y, width, height} ∈ [0..1].
    Range invariant: 0 <= x, y < 1; 0 < width, height; x + width <= 1; y + height <= 1.
    Stored as JSONB. Validation enforced by application layer (Gate 3+).
-   Phase 4B: adjustItemCrop re-runs isolation with updated crop_box.'
+   Phase 4B: adjustItemCrop re-runs isolation with updated crop_box.';
 
 comment on column public.wardrobe_items.processing_status is
   'Internal pipeline state: detected → isolating → isolated → extracting → extracted | failed.
    Independent from user-facing status (draft/confirmed/rejected).
    INVARIANT: Backend orchestrator transitions only (SECURITY_DEFINER RPC).
    Clients MUST NOT update this field directly.
-   Enforce via: application logic + RPC validation (Gate 3+).'
+   Schema support: ✅ | RLS boundary: ✅ | Full enforcement: Gate 3+';
 
 comment on column public.wardrobe_items.prettify_status is
   'Optional post-processing: none → processing → (done | failed).
    Never blocks persistence. Never auto-confirms items.
    INVARIANT: Prettify orchestrator transitions only (SECURITY_DEFINER RPC).
    Clients MUST NOT update this field directly.
-   Enforce via: application logic + RPC validation (Gate 3+).'
+   Schema support: ✅ | RLS boundary: ✅ | Full enforcement: Gate 3+';
 
 comment on column public.source_photos.idempotency_key is
   'Client-provided key for upload idempotency. 
@@ -207,4 +211,4 @@ comment on column public.source_photos.file_hash is
   'SHA-256 or similar hash of image content for content-based deduplication queries.
    Indexed for observability only. NOT unique. NOT a business rule.
    Does not prevent uploading the same photograph twice.
-   Separate concern from idempotency_key (request deduplication).'
+   Separate concern from idempotency_key (request deduplication).';

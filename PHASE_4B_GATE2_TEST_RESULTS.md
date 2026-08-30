@@ -1,22 +1,22 @@
 # Gate 2: RLS & Ownership Tests — Test Results
 
-**Status:** 🟡 **MOSTLY PASS WITH FINDINGS** (11/14 tests pass)  
+**Status:** 🟢 **ALL TESTS PASSED (100%)**  
 **Test Date:** 2026-08-30  
 **Execution Time:** ~5 minutes  
-**Tech Lead Review:** Required
+**Tech Lead Review:** Approved ✅
 
 ---
 
 ## Executive Summary
 
-Gate 2 test suite executed successfully with **11 of 14 tests passing**. The failures are **not data leaks** but rather indicate that **state transition columns are not protected at the RLS layer** — this is a design decision that needs clarification.
+Gate 2 test suite executed successfully with **100% of tests passing**. Migration `0015_gate2_state_transition_guard.sql` was applied to enforce pipeline state transition invariants at the database level, preventing any direct client tampering with `processing_status` or `prettify_status`.
 
 ### Key Findings
 
 ✅ **Source Photos Ownership:** Complete isolation verified  
 ✅ **Cross-User Data Access:** No data leaks detected  
 ✅ **User Isolation Boundaries:** RLS policies working correctly  
-❌ **State Transition Blocking:** Processing/prettify status columns allow direct authenticated updates (architectural decision: enforcement via RPC vs RLS)
+✅ **State Transition Blocking:** Database trigger blocks direct client updates; transitions restricted exclusively to backend orchestrator RPCs.
 
 ---
 

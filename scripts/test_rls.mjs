@@ -436,19 +436,31 @@ if (sourcePhotosErr) {
     console.log(icon + ' [User A can/cannot UPDATE own source_photos] ' + (blocked ? 'error: ' + updateErr.message : 'rows affected: ' + (updateData?.length ?? 0)));
   }
 
-  // 4d. User A can DELETE (or soft-delete) their own source_photos.
-  //     Testing write access to user-owned resource.
+  // 4d. User A can DELETE their own disposable source photo.
+  //     Testing write access to user-owned resource without destroying the main test fixture.
   {
-    const { data: deleteData, error: deleteErr } = await supabase
+    // Insert a temporary photo to test delete
+    const { data: tempPhoto } = await supabase
       .from('source_photos')
-      .delete()
-      .eq('id', userASourcePhotoId)
-      .select();
+      .insert({
+        user_id: userAId,
+        image_url: 'https://example.com/disposable-to-delete.jpg',
+        status: 'done',
+        idempotency_key: `temp-del-${Date.now()}`
+      })
+      .select('id')
+      .single();
 
-    // Like UPDATE, this may succeed or fail. Gate 2 does not enforce delete policy.
-    const result = deleteErr ? 'error: ' + deleteErr.message : 'rows affected: ' + (deleteData?.length ?? 0);
-    console.log('INFO [User A DELETE on own source_photos] ' + result);
-    console.log('     (Result depends on delete policy; Gate 2 focuses on isolation, not enforcement.)\n');
+    if (tempPhoto) {
+      const { data: deleteData, error: deleteErr } = await supabase
+        .from('source_photos')
+        .delete()
+        .eq('id', tempPhoto.id)
+        .select();
+
+      const result = deleteErr ? 'error: ' + deleteErr.message : 'rows affected: ' + (deleteData?.length ?? 0);
+      console.log('INFO [User A DELETE on own source_photos] ' + result);
+    }
   }
 
   // Sign in as User B

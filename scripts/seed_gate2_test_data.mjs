@@ -32,6 +32,16 @@ async function seedTestData() {
 
   try {
     // ─────────────────────────────────────────────────────────────────────────
+    // 0. Clean up any previous test data for idempotency
+    // ─────────────────────────────────────────────────────────────────────────
+    console.log('🧹 Cleaning up prior test data...');
+    await supabase
+      .from('source_photos')
+      .delete()
+      .in('user_id', [USER_A_ID, USER_B_ID])
+      .like('idempotency_key', 'test-%');
+
+    // ─────────────────────────────────────────────────────────────────────────
     // 1. Create source_photos for User A
     // ─────────────────────────────────────────────────────────────────────────
     console.log('📸 Creating source_photos for User A...');
@@ -83,9 +93,11 @@ async function seedTestData() {
       .from('wardrobe_items')
       .insert({
         source_photo_id: sourcePhotoA.id,
+        image_url: 'https://example.com/user-a-crop.jpg',
         display_name: 'Test Shirt - User A',
         source: 'user_upload',
-        category: 'shirt',
+        category: 'top',
+        subcategory: 'shirt',
         color: 'blue',
         pattern: 'solid',
         material: 'cotton',
@@ -129,9 +141,11 @@ async function seedTestData() {
       .from('wardrobe_items')
       .insert({
         source_photo_id: sourcePhotoB.id,
+        image_url: 'https://example.com/user-b-crop.jpg',
         display_name: 'Test Pants - User B',
         source: 'user_upload',
-        category: 'pants',
+        category: 'bottom',
+        subcategory: 'pants',
         color: 'black',
         pattern: 'solid',
         material: 'denim',

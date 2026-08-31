@@ -38,13 +38,19 @@ loadEnv();
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
-const USER_A_EMAIL = process.env.RLS_TEST_USER_A_EMAIL || 'test1@gmail.com';
-const USER_A_PASSWORD = process.env.RLS_TEST_USER_A_PASSWORD || 'test1@com';
-const USER_B_EMAIL = process.env.RLS_TEST_USER_B_EMAIL || 'test2@gmail.com';
-const USER_B_PASSWORD = process.env.RLS_TEST_USER_B_PASSWORD || 'test2@com';
+const USER_A_EMAIL = process.env.RLS_TEST_USER_A_EMAIL;
+const USER_A_PASSWORD = process.env.RLS_TEST_USER_A_PASSWORD;
+const USER_B_EMAIL = process.env.RLS_TEST_USER_B_EMAIL;
+const USER_B_PASSWORD = process.env.RLS_TEST_USER_B_PASSWORD;
 
 if (!SUPABASE_URL || !SERVICE_KEY) {
   console.error('❌ Missing SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_KEY in environment.');
+  process.exit(1);
+}
+
+if (!USER_A_EMAIL || !USER_A_PASSWORD || !USER_B_EMAIL || !USER_B_PASSWORD) {
+  console.error('❌ Missing test user credentials in environment (RLS_TEST_USER_A_EMAIL, RLS_TEST_USER_A_PASSWORD, RLS_TEST_USER_B_EMAIL, RLS_TEST_USER_B_PASSWORD).');
+  console.error('   Please define them in .env.local or process environment.');
   process.exit(1);
 }
 

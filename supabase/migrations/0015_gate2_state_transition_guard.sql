@@ -1,2 +1,0 @@
--- Superseded by 0015_phase4b_gate2_security.sql
--- See 0015_phase4b_gate2_security.sql for full Gate 2 RLS, ownership invariant, RPCs, and defense-in-depth trigger.

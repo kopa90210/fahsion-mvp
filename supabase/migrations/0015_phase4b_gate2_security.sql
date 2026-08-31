@@ -1,8 +1,18 @@
 -- 0015_phase4b_gate2_security.sql
--- Phase 4B Gate 2: RLS Ownership Isolation & State Mutation Authorization
+-- Phase 4B Gate 2B: Backend-Only Mutation Boundary & Provenance Hardening
 
 -- ---------------------------------------------------------------------------
--- 1. source_photos Row-Level Security
+-- 0. Drop Obsolete Function Overloads and Signatures
+-- ---------------------------------------------------------------------------
+-- Drop legacy 1-param create_draft_wardrobe_item(text) from migration 0013
+drop function if exists public.create_draft_wardrobe_item(text);
+
+-- Drop legacy 2-param client-callable transition RPCs from earlier Gate 2 drafts
+drop function if exists public.transition_wardrobe_item_processing_state(uuid, text);
+drop function if exists public.transition_wardrobe_item_prettify_state(uuid, text);
+
+-- ---------------------------------------------------------------------------
+-- 1. source_photos Row-Level Security & Mutability Hardening
 -- ---------------------------------------------------------------------------
 alter table public.source_photos enable row level security;
 
@@ -12,31 +22,37 @@ drop policy if exists "source_photos: owner insert" on public.source_photos;
 drop policy if exists "source_photos: owner update" on public.source_photos;
 drop policy if exists "source_photos: owner delete" on public.source_photos;
 
+-- 1.1 SELECT: Owner only
 create policy "source_photos: owner select"
   on public.source_photos for select
   to authenticated
   using (auth.uid() = user_id);
 
+-- 1.2 INSERT: Owner only; status must start as 'uploading' or 'detecting'
 create policy "source_photos: owner insert"
   on public.source_photos for insert
   to authenticated
-  with check (auth.uid() = user_id);
+  with check (
+    auth.uid() = user_id
+    and status in ('uploading', 'detecting')
+  );
 
-create policy "source_photos: owner update"
-  on public.source_photos for update
-  to authenticated
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-
+-- 1.3 DELETE: Owner only
 create policy "source_photos: owner delete"
   on public.source_photos for delete
   to authenticated
   using (auth.uid() = user_id);
 
-grant select, insert, update, delete on public.source_photos to authenticated;
+-- 1.4 Mutability Boundary:
+-- Revoke direct UPDATE on source_photos from authenticated/anon roles.
+-- Immutable fields: id, user_id, created_at, idempotency_key, file_hash
+-- Backend-controlled: status (updated exclusively by orchestrator / service_role)
+revoke update on public.source_photos from public, anon, authenticated;
+grant select, insert, delete on public.source_photos to authenticated;
+grant select, insert, update, delete on public.source_photos to service_role;
 
 -- ---------------------------------------------------------------------------
--- 2. wardrobe_items Row-Level Security (Curated vs User-Upload Privacy)
+-- 2. wardrobe_items Row-Level Security & Insertion Hardening
 -- ---------------------------------------------------------------------------
 alter table public.wardrobe_items enable row level security;
 
@@ -46,8 +62,7 @@ drop policy if exists "wardrobe_items: insert user_upload" on public.wardrobe_it
 drop policy if exists "wardrobe_items: authenticated insert user_upload" on public.wardrobe_items;
 drop policy if exists "wardrobe_items: owner structured update" on public.wardrobe_items;
 
--- Curated items are readable by any authenticated user.
--- User-uploaded items are readable ONLY by the owning user via user_wardrobe_items.
+-- 2.1 SELECT: Curated catalog is public to authenticated users; user uploads are private to owner
 create policy "wardrobe_items: select curated or own"
   on public.wardrobe_items for select
   to authenticated
@@ -60,14 +75,13 @@ create policy "wardrobe_items: select curated or own"
     )
   );
 
-create policy "wardrobe_items: insert user_upload"
-  on public.wardrobe_items for insert
-  to authenticated
-  with check (
-    auth.uid() is not null
-    and source = 'user_upload'
-  );
+-- 2.2 INSERT Boundary:
+-- Revoke direct INSERT on wardrobe_items from authenticated/anon roles.
+-- All user-upload wardrobe items MUST be created via create_draft_wardrobe_item RPC.
+revoke insert on public.wardrobe_items from public, anon, authenticated;
+grant insert on public.wardrobe_items to service_role;
 
+-- 2.3 UPDATE: Owner can update verified descriptive metadata only
 create policy "wardrobe_items: owner structured update"
   on public.wardrobe_items for update
   to authenticated
@@ -88,7 +102,26 @@ create policy "wardrobe_items: owner structured update"
     )
   );
 
-grant select, insert, update on public.wardrobe_items to authenticated;
+grant select on public.wardrobe_items to authenticated;
+grant select, update, delete on public.wardrobe_items to service_role;
+
+-- Exact verified column whitelist for client updates (no pipeline or provenance columns)
+grant update (
+  display_name,
+  brand,
+  color,
+  material,
+  fit,
+  pattern,
+  category,
+  subcategory,
+  style_tags,
+  layer_role,
+  formality_score,
+  season_weights,
+  image_url,
+  status
+) on public.wardrobe_items to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 3. Provenance-Enforcing Draft Wardrobe Item RPC
@@ -109,19 +142,21 @@ declare
 begin
   v_user_id := auth.uid();
   if v_user_id is null then
-    raise exception 'Not authenticated';
+    raise exception 'Not authenticated' using errcode = '42501';
   end if;
 
+  -- Verify source photo provenance & ownership if supplied
   if p_source_photo_id is not null then
     select user_id into v_photo_owner
     from public.source_photos
     where id = p_source_photo_id;
 
     if v_photo_owner is null or v_photo_owner <> v_user_id then
-      raise exception 'Source photo not found or ownership mismatch';
+      raise exception 'Source photo not found or ownership mismatch' using errcode = '42501';
     end if;
   end if;
 
+  -- Insert wardrobe item with guaranteed initial pipeline states
   insert into public.wardrobe_items (
     image_url,
     source,
@@ -140,6 +175,7 @@ begin
   )
   returning id into v_item_id;
 
+  -- Link ownership atomically
   insert into public.user_wardrobe_items (user_id, item_id, quantity)
   values (v_user_id, v_item_id, 1);
 
@@ -147,17 +183,18 @@ begin
 end;
 $$;
 
-revoke all on function public.create_draft_wardrobe_item(text, uuid) from public;
-grant execute on function public.create_draft_wardrobe_item(text, uuid) to authenticated;
+revoke all on function public.create_draft_wardrobe_item(text, uuid) from public, anon;
+grant execute on function public.create_draft_wardrobe_item(text, uuid) to authenticated, service_role;
 
 -- ---------------------------------------------------------------------------
--- 4. State Mutation Authorization RPCs
+-- 4. Backend-Only State Mutation Authorization RPCs
 -- ---------------------------------------------------------------------------
 
--- 4.1 Processing State Transition RPC
+-- 4.1 Processing State Transition RPC (Backend / Orchestrator Only)
 create or replace function public.transition_wardrobe_item_processing_state(
   p_item_id uuid,
-  p_target_status text
+  p_target_status text,
+  p_user_id uuid
 )
 returns text
 language plpgsql
@@ -165,21 +202,19 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_user_id uuid;
   v_current_status text;
   v_is_valid boolean := false;
 begin
-  v_user_id := auth.uid();
-  if v_user_id is null then
-    raise exception 'Not authenticated';
+  if p_user_id is null then
+    raise exception 'Target user context (p_user_id) is required' using errcode = '42501';
   end if;
 
-  -- Verify ownership via user_wardrobe_items
+  -- Verify ownership via user_wardrobe_items for the target user
   if not exists (
     select 1 from public.user_wardrobe_items
-    where item_id = p_item_id and user_id = v_user_id
+    where item_id = p_item_id and user_id = p_user_id
   ) then
-    raise exception 'Item not found or not owned by caller';
+    raise exception 'Item % not found or not owned by user %', p_item_id, p_user_id using errcode = '42501';
   end if;
 
   -- Lock row and read current processing_status
@@ -189,15 +224,15 @@ begin
   for update;
 
   if v_current_status is null then
-    raise exception 'Wardrobe item not found';
+    raise exception 'Wardrobe item % not found', p_item_id using errcode = 'P0002';
   end if;
 
   -- Authoritative Processing State Machine:
-  -- detected -> isolating, failed
-  -- isolating -> isolated, failed
-  -- isolated -> extracting, failed
+  -- detected   -> isolating, failed
+  -- isolating  -> isolated, failed
+  -- isolated   -> extracting, failed
   -- extracting -> extracted, failed
-  -- failed -> isolating, detected
+  -- failed     -> isolating, detected
   if (v_current_status = 'detected' and p_target_status in ('isolating', 'failed')) or
      (v_current_status = 'isolating' and p_target_status in ('isolated', 'failed')) or
      (v_current_status = 'isolated' and p_target_status in ('extracting', 'failed')) or
@@ -207,7 +242,8 @@ begin
   end if;
 
   if not v_is_valid then
-    raise exception 'Invalid processing state transition from % to %', v_current_status, p_target_status;
+    raise exception 'Invalid processing state transition from % to % for item %',
+      v_current_status, p_target_status, p_item_id using errcode = '22023';
   end if;
 
   -- Set transaction-local flag for defense-in-depth trigger
@@ -221,13 +257,14 @@ begin
 end;
 $$;
 
-revoke all on function public.transition_wardrobe_item_processing_state(uuid, text) from public;
-grant execute on function public.transition_wardrobe_item_processing_state(uuid, text) to authenticated;
+revoke all on function public.transition_wardrobe_item_processing_state(uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.transition_wardrobe_item_processing_state(uuid, text, uuid) to service_role;
 
--- 4.2 Prettify State Transition RPC
+-- 4.2 Prettify State Transition RPC (Backend / Orchestrator Only)
 create or replace function public.transition_wardrobe_item_prettify_state(
   p_item_id uuid,
-  p_target_status text
+  p_target_status text,
+  p_user_id uuid
 )
 returns text
 language plpgsql
@@ -235,21 +272,19 @@ security definer
 set search_path = public, pg_temp
 as $$
 declare
-  v_user_id uuid;
   v_current_status text;
   v_is_valid boolean := false;
 begin
-  v_user_id := auth.uid();
-  if v_user_id is null then
-    raise exception 'Not authenticated';
+  if p_user_id is null then
+    raise exception 'Target user context (p_user_id) is required' using errcode = '42501';
   end if;
 
-  -- Verify ownership via user_wardrobe_items
+  -- Verify ownership via user_wardrobe_items for the target user
   if not exists (
     select 1 from public.user_wardrobe_items
-    where item_id = p_item_id and user_id = v_user_id
+    where item_id = p_item_id and user_id = p_user_id
   ) then
-    raise exception 'Item not found or not owned by caller';
+    raise exception 'Item % not found or not owned by user %', p_item_id, p_user_id using errcode = '42501';
   end if;
 
   -- Lock row and read current prettify_status
@@ -259,21 +294,22 @@ begin
   for update;
 
   if v_current_status is null then
-    raise exception 'Wardrobe item not found';
+    raise exception 'Wardrobe item % not found', p_item_id using errcode = 'P0002';
   end if;
 
   -- Authoritative Prettify State Machine:
-  -- none -> processing
+  -- none       -> processing
   -- processing -> done, failed
-  -- failed -> processing
+  -- failed     -> processing
   if (v_current_status = 'none' and p_target_status = 'processing') or
      (v_current_status = 'processing' and p_target_status in ('done', 'failed')) or
-     (v_current_status = 'failed' and p_target_status = 'processing') then
+     (v_current_status = 'failed' and p_target_status in ('processing')) then
     v_is_valid := true;
   end if;
 
   if not v_is_valid then
-    raise exception 'Invalid prettify state transition from % to %', v_current_status, p_target_status;
+    raise exception 'Invalid prettify state transition from % to % for item %',
+      v_current_status, p_target_status, p_item_id using errcode = '22023';
   end if;
 
   -- Set transaction-local flag for defense-in-depth trigger
@@ -287,8 +323,8 @@ begin
 end;
 $$;
 
-revoke all on function public.transition_wardrobe_item_prettify_state(uuid, text) from public;
-grant execute on function public.transition_wardrobe_item_prettify_state(uuid, text) to authenticated;
+revoke all on function public.transition_wardrobe_item_prettify_state(uuid, text, uuid) from public, anon, authenticated;
+grant execute on function public.transition_wardrobe_item_prettify_state(uuid, text, uuid) to service_role;
 
 -- ---------------------------------------------------------------------------
 -- 5. Defense-in-Depth Pipeline State Guard Trigger
@@ -303,11 +339,13 @@ begin
   -- If transition is NOT marked by trusted RPC, block direct tampering
   if nullif(current_setting('app.pipeline_transition', true), '') is null then
     if (new.processing_status is distinct from old.processing_status) then
-      raise exception 'Direct update of processing_status is forbidden. Pipeline state transitions must use backend orchestrator RPCs.';
+      raise exception 'Direct update of processing_status is forbidden. Transitions must occur via backend orchestrator.'
+        using errcode = '42501';
     end if;
 
     if (new.prettify_status is distinct from old.prettify_status) then
-      raise exception 'Direct update of prettify_status is forbidden. Prettify state transitions must use backend orchestrator RPCs.';
+      raise exception 'Direct update of prettify_status is forbidden. Transitions must occur via backend orchestrator.'
+        using errcode = '42501';
     end if;
   end if;
 

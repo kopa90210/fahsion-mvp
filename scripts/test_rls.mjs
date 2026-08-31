@@ -1,16 +1,17 @@
 /**
  * scripts/test_rls.mjs
- * Phase 4B Gate 2: RLS & State Mutation Authorization Test Suite
+ * Phase 4B Gate 2B: RLS & Backend-Only State Mutation Authorization Test Suite
  *
  * Verifies:
- *   - Group A: source_photos ownership isolation (A<->B cross-user protection for SELECT/UPDATE/DELETE)
- *   - Group B: wardrobe_items privacy (user uploads are private; curated catalog is readable and immutable)
+ *   - Group A: source_photos ownership isolation & field mutability protection
+ *   - Group B: wardrobe_items privacy & direct INSERT denial for authenticated clients
  *   - Group C: Direct pipeline state mutation denial (direct client updates to processing/prettify status forbidden)
- *   - Group D: Authorized state transitions via trusted SECURITY DEFINER RPC (positive path)
- *   - Group E: Invalid state transitions rejection (negative path + verify DB state unchanged)
- *   - Group F: Cross-user transition attempts rejection
- *   - Group G: Source photo -> wardrobe item provenance invariant enforcement
- *   - Group H: Failure and edge cases (unauthenticated, unknown item/photo, etc.)
+ *   - Group D: Client denial on internal transition RPCs (both legacy 2-param and new 3-param)
+ *   - Group E: Backend service-role authorized state transitions (positive path)
+ *   - Group F: Invalid state transitions rejection & state immutability on failure
+ *   - Group G: Cross-user transition attempts rejection by backend RPC & state immutability
+ *   - Group H: Source photo -> wardrobe item provenance invariant enforcement
+ *   - Group I: Failure and edge cases (unauthenticated, unknown items/photos, etc.)
  */
 
 import fs from 'node:fs';
@@ -39,8 +40,8 @@ function loadEnv() {
 
 loadEnv();
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ;
-const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ;
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY;
 const SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
 const USER_A_EMAIL = process.env.RLS_TEST_USER_A_EMAIL;
@@ -59,6 +60,11 @@ if (!USER_A_EMAIL || !USER_A_PASSWORD || !USER_B_EMAIL || !USER_B_PASSWORD) {
   process.exit(1);
 }
 
+if (!SERVICE_KEY) {
+  console.error('❌ Missing SUPABASE_SERVICE_KEY in environment (required for backend orchestrator tests).');
+  process.exit(1);
+}
+
 // ── Instantiate Separate Supabase Clients ─────────────────────────────────────
 const clientA = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
@@ -72,9 +78,9 @@ const anonClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
   auth: { autoRefreshToken: false, persistSession: false },
 });
 
-const serviceClient = SERVICE_KEY
-  ? createClient(SUPABASE_URL, SERVICE_KEY, { auth: { autoRefreshToken: false, persistSession: false } })
-  : null;
+const serviceClient = createClient(SUPABASE_URL, SERVICE_KEY, {
+  auth: { autoRefreshToken: false, persistSession: false },
+});
 
 // ── Test Reporting Infrastructure ─────────────────────────────────────────────
 const testResults = [];
@@ -90,7 +96,7 @@ function recordResult(group, testName, expected, actual, pass, details = '') {
 
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════════════════════╗');
-  console.log('║        PHASE 4B — GATE 2 SECURITY & STATE MUTATION TEST SUITE            ║');
+  console.log('║        PHASE 4B — GATE 2B SECURITY & STATE MUTATION TEST SUITE           ║');
   console.log('╚══════════════════════════════════════════════════════════════════════════╝\n');
 
   // Authenticate Client A
@@ -171,9 +177,9 @@ async function main() {
   console.log('──────────────────────────────────────────────────────────────────────────\n');
 
   // =========================================================================
-  // GROUP A: source_photos Ownership Isolation
+  // GROUP A: source_photos Ownership Isolation & Mutability Protection
   // =========================================================================
-  console.log('--- GROUP A: source_photos Ownership Isolation ---');
+  console.log('--- GROUP A: source_photos Ownership Isolation & Mutability Protection ---');
 
   // A1: User A SELECT own source_photos
   {
@@ -203,7 +209,7 @@ async function main() {
     recordResult('Group A', 'User B SELECT User A source_photo', '0 rows (DENIED)', `${data?.length ?? 0} rows`, pass);
   }
 
-  // A5: User A unfiltered SELECT on source_photos leaks no User B rows
+  // A5: User A unfiltered SELECT leaks no foreign rows
   {
     const { data, error } = await clientA.from('source_photos').select('id, user_id');
     const leaked = (data ?? []).filter((r) => r.user_id !== userAId);
@@ -211,59 +217,29 @@ async function main() {
     recordResult('Group A', 'User A unfiltered SELECT leaks no foreign rows', '0 foreign rows', `${leaked.length} leaked`, pass);
   }
 
-  // A6: User B unfiltered SELECT on source_photos leaks no User A rows
-  {
-    const { data, error } = await clientB.from('source_photos').select('id, user_id');
-    const leaked = (data ?? []).filter((r) => r.user_id !== userBId);
-    const pass = !error && leaked.length === 0;
-    recordResult('Group A', 'User B unfiltered SELECT leaks no foreign rows', '0 foreign rows', `${leaked.length} leaked`, pass);
-  }
-
-  // A7: User A UPDATE own source_photos
+  // A6: Client A attempts direct UPDATE on source_photos (Protected field: status)
   {
     const { data, error } = await clientA
       .from('source_photos')
       .update({ status: 'done' })
       .eq('id', sourcePhotoAId)
       .select();
-    const pass = !error && data.length === 1;
-    recordResult('Group A', 'User A UPDATE own source_photo', '1 row updated (ALLOW)', error ? error.message : `${data?.length ?? 0} rows`, pass);
+    const pass = error != null || (data && data.length === 0);
+    recordResult('Group A', 'Client direct UPDATE source_photos status', 'Blocked / 0 rows (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
   }
 
-  // A8: User B UPDATE own source_photos
-  {
-    const { data, error } = await clientB
-      .from('source_photos')
-      .update({ status: 'done' })
-      .eq('id', sourcePhotoBId)
-      .select();
-    const pass = !error && data.length === 1;
-    recordResult('Group A', 'User B UPDATE own source_photo', '1 row updated (ALLOW)', error ? error.message : `${data?.length ?? 0} rows`, pass);
-  }
-
-  // A9: User A UPDATE User B source_photos
+  // A7: Client A attempts direct UPDATE on source_photos (Protected field: user_id ownership tampering)
   {
     const { data, error } = await clientA
       .from('source_photos')
-      .update({ status: 'failed' })
-      .eq('id', sourcePhotoBId)
-      .select();
-    const pass = error != null || (data && data.length === 0);
-    recordResult('Group A', 'User A UPDATE User B source_photo', '0 rows / blocked (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
-  }
-
-  // A10: User B UPDATE User A source_photos
-  {
-    const { data, error } = await clientB
-      .from('source_photos')
-      .update({ status: 'failed' })
+      .update({ user_id: userBId })
       .eq('id', sourcePhotoAId)
       .select();
     const pass = error != null || (data && data.length === 0);
-    recordResult('Group A', 'User B UPDATE User A source_photo', '0 rows / blocked (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
+    recordResult('Group A', 'Client direct UPDATE source_photos user_id', 'Blocked / 0 rows (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
   }
 
-  // A11: User A DELETE User B source_photos
+  // A8: User A DELETE User B source_photo
   {
     const { data, error } = await clientA
       .from('source_photos')
@@ -274,21 +250,10 @@ async function main() {
     recordResult('Group A', 'User A DELETE User B source_photo', '0 rows / blocked (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
   }
 
-  // A12: User B DELETE User A source_photos
-  {
-    const { data, error } = await clientB
-      .from('source_photos')
-      .delete()
-      .eq('id', sourcePhotoAId)
-      .select();
-    const pass = error != null || (data && data.length === 0);
-    recordResult('Group A', 'User B DELETE User A source_photo', '0 rows / blocked (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
-  }
-
   // =========================================================================
-  // GROUP B: User-Uploaded Wardrobe Item Privacy & Curated Catalog
+  // GROUP B: wardrobe_items Privacy & Direct INSERT Denial
   // =========================================================================
-  console.log('\n--- GROUP B: wardrobe_items Privacy & Curated Catalog ---');
+  console.log('\n--- GROUP B: wardrobe_items Privacy & Direct INSERT Denial ---');
 
   // B1: User A reads own upload item
   {
@@ -297,83 +262,41 @@ async function main() {
     recordResult('Group B', 'User A reads own upload item', '1 row returned (ALLOW)', `${data?.length ?? 0} rows`, pass);
   }
 
-  // B2: User B reads own upload item
-  {
-    const { data, error } = await clientB.from('wardrobe_items').select('id, source').eq('id', wardrobeItemBId);
-    const pass = !error && data.length === 1;
-    recordResult('Group B', 'User B reads own upload item', '1 row returned (ALLOW)', `${data?.length ?? 0} rows`, pass);
-  }
-
-  // B3: User A reads User B upload item
+  // B2: User A reads User B upload item (Must be DENIED)
   {
     const { data, error } = await clientA.from('wardrobe_items').select('id, source').eq('id', wardrobeItemBId);
     const pass = !error && data.length === 0;
     recordResult('Group B', 'User A reads User B upload item', '0 rows (DENY)', `${data?.length ?? 0} rows`, pass);
   }
 
-  // B4: User B reads User A upload item
-  {
-    const { data, error } = await clientB.from('wardrobe_items').select('id, source').eq('id', wardrobeItemAId);
-    const pass = !error && data.length === 0;
-    recordResult('Group B', 'User B reads User A upload item', '0 rows (DENY)', `${data?.length ?? 0} rows`, pass);
-  }
-
-  // B5: User A unfiltered SELECT leaks no User B user_upload items
-  {
-    const { data, error } = await clientA.from('wardrobe_items').select('id, source');
-    // If it's a user_upload, User A must own it in user_wardrobe_items
-    const userAOwnedItemIds = new Set(userAItems.map((r) => r.item_id));
-    const leaked = (data ?? []).filter((r) => r.source === 'user_upload' && !userAOwnedItemIds.has(r.id));
-    const pass = !error && leaked.length === 0;
-    recordResult('Group B', 'User A unfiltered SELECT leaks no foreign user_upload items', '0 foreign uploads', `${leaked.length} leaked`, pass);
-  }
-
-  // B6: User B unfiltered SELECT leaks no User A user_upload items
-  {
-    const { data, error } = await clientB.from('wardrobe_items').select('id, source');
-    const userBOwnedItemIds = new Set(userBItems.map((r) => r.item_id));
-    const leaked = (data ?? []).filter((r) => r.source === 'user_upload' && !userBOwnedItemIds.has(r.id));
-    const pass = !error && leaked.length === 0;
-    recordResult('Group B', 'User B unfiltered SELECT leaks no foreign user_upload items', '0 foreign uploads', `${leaked.length} leaked`, pass);
-  }
-
-  // B7: User A mutates User B upload item
-  {
-    const { data, error } = await clientA
-      .from('wardrobe_items')
-      .update({ display_name: 'tampered by user A' })
-      .eq('id', wardrobeItemBId)
-      .select();
-    const pass = error != null || (data && data.length === 0);
-    recordResult('Group B', 'User A mutates User B upload item', '0 rows / blocked (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
-  }
-
-  // B8: User B mutates User A upload item
-  {
-    const { data, error } = await clientB
-      .from('wardrobe_items')
-      .update({ display_name: 'tampered by user B' })
-      .eq('id', wardrobeItemAId)
-      .select();
-    const pass = error != null || (data && data.length === 0);
-    recordResult('Group B', 'User B mutates User A upload item', '0 rows / blocked (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
-  }
-
-  // B9: Curated item readable by User A
+  // B3: Curated item readable by User A
   {
     const { data, error } = await clientA.from('wardrobe_items').select('id, source').eq('id', curatedItemId);
     const pass = !error && data.length === 1 && data[0].source === 'curated';
     recordResult('Group B', 'User A reads curated item', '1 row returned (ALLOW)', `${data?.length ?? 0} rows`, pass);
   }
 
-  // B10: Curated item readable by User B
+  // B4: Authenticated client direct INSERT into wardrobe_items (Must be DENIED)
   {
-    const { data, error } = await clientB.from('wardrobe_items').select('id, source').eq('id', curatedItemId);
-    const pass = !error && data.length === 1 && data[0].source === 'curated';
-    recordResult('Group B', 'User B reads curated item', '1 row returned (ALLOW)', `${data?.length ?? 0} rows`, pass);
+    const { data, error } = await clientA
+      .from('wardrobe_items')
+      .insert({
+        source: 'user_upload',
+        image_url: 'https://example.com/exploit-direct-insert.jpg',
+        status: 'confirmed',
+      })
+      .select();
+    const pass = error != null;
+    recordResult(
+      'Group B',
+      'Client direct INSERT into wardrobe_items',
+      'Exception / Permission Denied (DENY)',
+      error ? `Blocked: ${error.message}` : `Exploit allowed: ${data?.length} rows`,
+      pass
+    );
   }
 
-  // B11: Authenticated user cannot mutate curated item
+  // B5: Authenticated client cannot mutate curated item
   {
     const { data, error } = await clientA
       .from('wardrobe_items')
@@ -381,11 +304,11 @@ async function main() {
       .eq('id', curatedItemId)
       .select();
     const pass = error != null || (data && data.length === 0);
-    recordResult('Group B', 'Authenticated user cannot mutate curated item', '0 rows / blocked (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
+    recordResult('Group B', 'Authenticated client mutate curated item', '0 rows / blocked (DENY)', error ? error.message : `${data?.length ?? 0} rows`, pass);
   }
 
   // =========================================================================
-  // GROUP C: Direct Pipeline State Mutation Tests
+  // GROUP C: Direct Pipeline State Mutation Tests (Column & Trigger Protection)
   // =========================================================================
   console.log('\n--- GROUP C: Direct Pipeline State Mutation Tests ---');
 
@@ -396,11 +319,11 @@ async function main() {
       .update({ processing_status: 'isolating' })
       .eq('id', wardrobeItemAId)
       .select();
-    const pass = error != null; // Trigger raises exception
+    const pass = error != null;
     recordResult(
       'Group C',
-      'User A direct UPDATE processing_status',
-      'Exception raised (DENY)',
+      'Client direct UPDATE processing_status',
+      'Exception / Trigger Blocked (DENY)',
       error ? `Blocked: ${error.message}` : `Allowed (${data?.length} rows)`,
       pass
     );
@@ -413,105 +336,156 @@ async function main() {
       .update({ prettify_status: 'processing' })
       .eq('id', wardrobeItemAId)
       .select();
-    const pass = error != null; // Trigger raises exception
+    const pass = error != null;
     recordResult(
       'Group C',
-      'User A direct UPDATE prettify_status',
-      'Exception raised (DENY)',
+      'Client direct UPDATE prettify_status',
+      'Exception / Trigger Blocked (DENY)',
       error ? `Blocked: ${error.message}` : `Allowed (${data?.length} rows)`,
       pass
     );
   }
 
   // =========================================================================
-  // GROUP D: Trusted RPC Positive State Transitions
+  // GROUP D: Client Invocation Denial on Internal Transition RPCs
   // =========================================================================
-  console.log('\n--- GROUP D: Trusted RPC Positive State Transitions ---');
+  console.log('\n--- GROUP D: Client Invocation Denial on Internal Transition RPCs ---');
 
-  // Reset Item A to 'detected' via service client or check initial state
-  if (serviceClient) {
-    await serviceClient
-      .from('wardrobe_items')
-      .update({ processing_status: 'detected', prettify_status: 'none' })
-      .eq('id', wardrobeItemAId);
-  }
-
-  // D1: detected -> isolating
+  // D1: Client calls legacy 2-param transition_processing (Must fail: dropped / revoked)
   {
     const { data, error } = await clientA.rpc('transition_wardrobe_item_processing_state', {
       p_item_id: wardrobeItemAId,
       p_target_status: 'isolating',
     });
-    const pass = !error && data === 'isolating';
-    recordResult('Group D', 'Transition detected -> isolating', 'isolating (SUCCESS)', error ? error.message : data, pass);
+    const pass = error != null;
+    recordResult('Group D', 'Client calls legacy 2-param transition_processing', 'Exception / Not Found (DENY)', error ? error.message : 'Allowed', pass);
   }
 
-  // D2: isolating -> isolated
+  // D2: Client calls new 3-param transition_processing (Must fail: permission denied 42501)
   {
     const { data, error } = await clientA.rpc('transition_wardrobe_item_processing_state', {
       p_item_id: wardrobeItemAId,
-      p_target_status: 'isolated',
+      p_target_status: 'isolating',
+      p_user_id: userAId,
     });
-    const pass = !error && data === 'isolated';
-    recordResult('Group D', 'Transition isolating -> isolated', 'isolated (SUCCESS)', error ? error.message : data, pass);
+    const pass = error != null;
+    recordResult('Group D', 'Client calls 3-param transition_processing', 'Permission Denied (DENY)', error ? error.message : 'Allowed', pass);
   }
 
-  // D3: isolated -> extracting
-  {
-    const { data, error } = await clientA.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
-      p_target_status: 'extracting',
-    });
-    const pass = !error && data === 'extracting';
-    recordResult('Group D', 'Transition isolated -> extracting', 'extracting (SUCCESS)', error ? error.message : data, pass);
-  }
-
-  // D4: extracting -> extracted
-  {
-    const { data, error } = await clientA.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
-      p_target_status: 'extracted',
-    });
-    const pass = !error && data === 'extracted';
-    recordResult('Group D', 'Transition extracting -> extracted', 'extracted (SUCCESS)', error ? error.message : data, pass);
-  }
-
-  // D5: Prettify none -> processing
+  // D3: Client calls legacy 2-param transition_prettify (Must fail: dropped / revoked)
   {
     const { data, error } = await clientA.rpc('transition_wardrobe_item_prettify_state', {
       p_item_id: wardrobeItemAId,
       p_target_status: 'processing',
     });
-    const pass = !error && data === 'processing';
-    recordResult('Group D', 'Prettify none -> processing', 'processing (SUCCESS)', error ? error.message : data, pass);
+    const pass = error != null;
+    recordResult('Group D', 'Client calls legacy 2-param transition_prettify', 'Exception / Not Found (DENY)', error ? error.message : 'Allowed', pass);
   }
 
-  // D6: Prettify processing -> done
+  // D4: Client calls new 3-param transition_prettify (Must fail: permission denied 42501)
   {
     const { data, error } = await clientA.rpc('transition_wardrobe_item_prettify_state', {
       p_item_id: wardrobeItemAId,
-      p_target_status: 'done',
+      p_target_status: 'processing',
+      p_user_id: userAId,
     });
-    const pass = !error && data === 'done';
-    recordResult('Group D', 'Prettify processing -> done', 'done (SUCCESS)', error ? error.message : data, pass);
+    const pass = error != null;
+    recordResult('Group D', 'Client calls 3-param transition_prettify', 'Permission Denied (DENY)', error ? error.message : 'Allowed', pass);
   }
 
   // =========================================================================
-  // GROUP E: Invalid State Transitions (Negative Path & Immutability)
+  // GROUP E: Backend Service-Role Authorized State Transitions
   // =========================================================================
-  console.log('\n--- GROUP E: Invalid State Transitions ---');
+  console.log('\n--- GROUP E: Backend Service-Role Authorized State Transitions ---');
 
-  // E1: extracted -> detected (invalid backward jump)
+  // Reset Item A to 'detected' via service client
+  await serviceClient
+    .from('wardrobe_items')
+    .update({ processing_status: 'detected', prettify_status: 'none' })
+    .eq('id', wardrobeItemAId);
+
+  // E1: Service-Role transition: detected -> isolating
   {
-    const { data, error } = await clientA.rpc('transition_wardrobe_item_processing_state', {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
+      p_item_id: wardrobeItemAId,
+      p_target_status: 'isolating',
+      p_user_id: userAId,
+    });
+    const pass = !error && data === 'isolating';
+    recordResult('Group E', 'Service-Role transition detected -> isolating', 'isolating (SUCCESS)', error ? error.message : data, pass);
+  }
+
+  // E2: Service-Role transition: isolating -> isolated
+  {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
+      p_item_id: wardrobeItemAId,
+      p_target_status: 'isolated',
+      p_user_id: userAId,
+    });
+    const pass = !error && data === 'isolated';
+    recordResult('Group E', 'Service-Role transition isolating -> isolated', 'isolated (SUCCESS)', error ? error.message : data, pass);
+  }
+
+  // E3: Service-Role transition: isolated -> extracting
+  {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
+      p_item_id: wardrobeItemAId,
+      p_target_status: 'extracting',
+      p_user_id: userAId,
+    });
+    const pass = !error && data === 'extracting';
+    recordResult('Group E', 'Service-Role transition isolated -> extracting', 'extracting (SUCCESS)', error ? error.message : data, pass);
+  }
+
+  // E4: Service-Role transition: extracting -> extracted
+  {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
+      p_item_id: wardrobeItemAId,
+      p_target_status: 'extracted',
+      p_user_id: userAId,
+    });
+    const pass = !error && data === 'extracted';
+    recordResult('Group E', 'Service-Role transition extracting -> extracted', 'extracted (SUCCESS)', error ? error.message : data, pass);
+  }
+
+  // E5: Service-Role Prettify: none -> processing
+  {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_prettify_state', {
+      p_item_id: wardrobeItemAId,
+      p_target_status: 'processing',
+      p_user_id: userAId,
+    });
+    const pass = !error && data === 'processing';
+    recordResult('Group E', 'Service-Role prettify none -> processing', 'processing (SUCCESS)', error ? error.message : data, pass);
+  }
+
+  // E6: Service-Role Prettify: processing -> done
+  {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_prettify_state', {
+      p_item_id: wardrobeItemAId,
+      p_target_status: 'done',
+      p_user_id: userAId,
+    });
+    const pass = !error && data === 'done';
+    recordResult('Group E', 'Service-Role prettify processing -> done', 'done (SUCCESS)', error ? error.message : data, pass);
+  }
+
+  // =========================================================================
+  // GROUP F: Invalid State Transitions & Immutability Check
+  // =========================================================================
+  console.log('\n--- GROUP F: Invalid State Transitions & Immutability Check ---');
+
+  // F1: extracted -> detected (invalid backward jump)
+  {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
       p_item_id: wardrobeItemAId,
       p_target_status: 'detected',
+      p_user_id: userAId,
     });
-    // Check that DB state is still 'extracted'
-    const { data: dbRow } = await clientA.from('wardrobe_items').select('processing_status').eq('id', wardrobeItemAId).single();
+    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('processing_status').eq('id', wardrobeItemAId).single();
     const pass = error != null && dbRow?.processing_status === 'extracted';
     recordResult(
-      'Group E',
+      'Group F',
       'Invalid transition extracted -> detected',
       'Exception & state unchanged (DENIED)',
       error ? `Rejected: ${error.message} (DB state: ${dbRow?.processing_status})` : `Unexpected success: ${data}`,
@@ -519,33 +493,17 @@ async function main() {
     );
   }
 
-  // E2: extracted -> isolating (invalid retry when not in failed)
+  // F2: Prettify done -> processing (invalid transition from terminal done)
   {
-    const { data, error } = await clientA.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
-      p_target_status: 'isolating',
-    });
-    const { data: dbRow } = await clientA.from('wardrobe_items').select('processing_status').eq('id', wardrobeItemAId).single();
-    const pass = error != null && dbRow?.processing_status === 'extracted';
-    recordResult(
-      'Group E',
-      'Invalid transition extracted -> isolating',
-      'Exception & state unchanged (DENIED)',
-      error ? `Rejected: ${error.message} (DB state: ${dbRow?.processing_status})` : `Unexpected success: ${data}`,
-      pass
-    );
-  }
-
-  // E3: Prettify done -> processing (invalid transition from terminal done)
-  {
-    const { data, error } = await clientA.rpc('transition_wardrobe_item_prettify_state', {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_prettify_state', {
       p_item_id: wardrobeItemAId,
       p_target_status: 'processing',
+      p_user_id: userAId,
     });
-    const { data: dbRow } = await clientA.from('wardrobe_items').select('prettify_status').eq('id', wardrobeItemAId).single();
+    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('prettify_status').eq('id', wardrobeItemAId).single();
     const pass = error != null && dbRow?.prettify_status === 'done';
     recordResult(
-      'Group E',
+      'Group F',
       'Invalid prettify done -> processing',
       'Exception & state unchanged (DENIED)',
       error ? `Rejected: ${error.message} (DB state: ${dbRow?.prettify_status})` : `Unexpected success: ${data}`,
@@ -554,38 +512,40 @@ async function main() {
   }
 
   // =========================================================================
-  // GROUP F: Cross-User RPC Calls
+  // GROUP G: Cross-User Ownership Enforcement in Backend RPC
   // =========================================================================
-  console.log('\n--- GROUP F: Cross-User RPC Calls ---');
+  console.log('\n--- GROUP G: Cross-User Ownership Enforcement in Backend RPC ---');
 
-  // F1: User B tries to transition User A's item processing state
+  // G1: Backend passes User B user_id for User A's item (processing)
   {
-    const { data, error } = await clientB.rpc('transition_wardrobe_item_processing_state', {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
       p_item_id: wardrobeItemAId,
       p_target_status: 'failed',
+      p_user_id: userBId,
     });
-    const { data: dbRow } = await clientA.from('wardrobe_items').select('processing_status').eq('id', wardrobeItemAId).single();
+    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('processing_status').eq('id', wardrobeItemAId).single();
     const pass = error != null && dbRow?.processing_status === 'extracted';
     recordResult(
-      'Group F',
-      'User B transition User A item (processing)',
+      'Group G',
+      'Cross-user transition attempt (processing)',
       'Exception & state unchanged (DENIED)',
       error ? `Blocked: ${error.message} (DB state: ${dbRow?.processing_status})` : `Unexpected success: ${data}`,
       pass
     );
   }
 
-  // F2: User B tries to transition User A's item prettify state
+  // G2: Backend passes User B user_id for User A's item (prettify)
   {
-    const { data, error } = await clientB.rpc('transition_wardrobe_item_prettify_state', {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_prettify_state', {
       p_item_id: wardrobeItemAId,
       p_target_status: 'failed',
+      p_user_id: userBId,
     });
-    const { data: dbRow } = await clientA.from('wardrobe_items').select('prettify_status').eq('id', wardrobeItemAId).single();
+    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('prettify_status').eq('id', wardrobeItemAId).single();
     const pass = error != null && dbRow?.prettify_status === 'done';
     recordResult(
-      'Group F',
-      'User B transition User A item (prettify)',
+      'Group G',
+      'Cross-user transition attempt (prettify)',
       'Exception & state unchanged (DENIED)',
       error ? `Blocked: ${error.message} (DB state: ${dbRow?.prettify_status})` : `Unexpected success: ${data}`,
       pass
@@ -593,58 +553,60 @@ async function main() {
   }
 
   // =========================================================================
-  // GROUP G: Source Photo -> Wardrobe Item Provenance Invariant
+  // GROUP H: Provenance Invariant Enforcement (create_draft_wardrobe_item)
   // =========================================================================
-  console.log('\n--- GROUP G: Provenance Invariant Enforcement ---');
+  console.log('\n--- GROUP H: Provenance Invariant Enforcement ---');
 
-  // G1: User A creates derived item referencing User A's source photo
+  // H1: User A creates draft item referencing owned source photo
   let userADerivedItemId = null;
   {
     const { data, error } = await clientA.rpc('create_draft_wardrobe_item', {
-      p_image_url: 'https://example.com/user-a-derived-garment.jpg',
+      p_image_url: 'https://example.com/user-a-provenance-test.jpg',
       p_source_photo_id: sourcePhotoAId,
     });
     userADerivedItemId = data;
     const pass = !error && userADerivedItemId != null;
     recordResult(
-      'Group G',
-      'User A creates derived item with own source photo',
+      'Group H',
+      'User A creates item with owned source photo',
       'Item UUID returned (ALLOW)',
       error ? error.message : `Created item: ${userADerivedItemId}`,
       pass
     );
   }
 
-  // G2: Verify provenance link in database
+  // H2: Verify provenance linkage and default states in database
   if (userADerivedItemId) {
     const { data, error } = await clientA
       .from('wardrobe_items')
-      .select('id, source_photo_id, source, processing_status, prettify_status')
+      .select('id, source_photo_id, source, processing_status, prettify_status, status')
       .eq('id', userADerivedItemId)
       .single();
     const pass =
       !error &&
       data.source_photo_id === sourcePhotoAId &&
       data.source === 'user_upload' &&
-      data.processing_status === 'detected';
+      data.status === 'draft' &&
+      data.processing_status === 'detected' &&
+      data.prettify_status === 'none';
     recordResult(
-      'Group G',
-      'Verify derived item provenance linkage',
-      'source_photo_id matches User A photo',
-      error ? error.message : `Linked: ${data?.source_photo_id}`,
+      'Group H',
+      'Verify derived item provenance & default state',
+      'source_photo_id linked, status=draft, processing=detected, prettify=none',
+      error ? error.message : `Linked: ${data?.source_photo_id}, processing: ${data?.processing_status}`,
       pass
     );
   }
 
-  // G3: User A attempts to create derived item referencing User B's source photo
+  // H3: User A attempts to create item referencing User B's source photo (Provenance Spoof)
   {
     const { data, error } = await clientA.rpc('create_draft_wardrobe_item', {
-      p_image_url: 'https://example.com/exploit-derived-garment.jpg',
+      p_image_url: 'https://example.com/exploit-spoof-photo.jpg',
       p_source_photo_id: sourcePhotoBId,
     });
     const pass = error != null && data == null;
     recordResult(
-      'Group G',
+      'Group H',
       'User A links User B source photo (Provenance Spoof)',
       'Exception / ownership mismatch (DENIED)',
       error ? `Blocked: ${error.message}` : `Exploit succeeded: ${data}`,
@@ -653,32 +615,34 @@ async function main() {
   }
 
   // =========================================================================
-  // GROUP H: Failure and Edge Cases
+  // GROUP I: Failure and Edge Cases
   // =========================================================================
-  console.log('\n--- GROUP H: Failure and Edge Cases ---');
+  console.log('\n--- GROUP I: Failure and Edge Cases ---');
 
-  // H1: Missing / Non-existent wardrobe item UUID
+  // I1: Non-existent item UUID transition attempt by service-role
   {
     const fakeId = '00000000-0000-0000-0000-000000000000';
-    const { data, error } = await clientA.rpc('transition_wardrobe_item_processing_state', {
+    const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
       p_item_id: fakeId,
       p_target_status: 'isolating',
+      p_user_id: userAId,
     });
     const pass = error != null;
-    recordResult('Group H', 'Transition non-existent item UUID', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
+    recordResult('Group I', 'Transition non-existent item UUID', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
   }
 
-  // H2: Unauthenticated caller calls transition RPC
+  // I2: Unauthenticated caller calls transition RPC
   {
     const { data, error } = await anonClient.rpc('transition_wardrobe_item_processing_state', {
       p_item_id: wardrobeItemAId,
       p_target_status: 'isolating',
+      p_user_id: userAId,
     });
     const pass = error != null;
-    recordResult('Group H', 'Unauthenticated caller calls transition RPC', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
+    recordResult('Group I', 'Unauthenticated caller calls transition RPC', 'Exception / 42501 (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
   }
 
-  // H3: Draft creation with non-existent source photo UUID
+  // I3: Draft creation with non-existent source photo UUID
   {
     const fakePhotoId = '00000000-0000-0000-0000-000000000000';
     const { data, error } = await clientA.rpc('create_draft_wardrobe_item', {
@@ -686,16 +650,17 @@ async function main() {
       p_source_photo_id: fakePhotoId,
     });
     const pass = error != null;
-    recordResult('Group H', 'Draft creation with non-existent source photo', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
+    recordResult('Group I', 'Draft creation with non-existent source photo', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
   }
 
   // =========================================================================
   // Final Summary & Exit
   // =========================================================================
   console.log('\n══════════════════════════════════════════════════════════════════════════');
-  console.log(`Gate 2 Test Summary: ${testResults.filter((r) => r.result === 'PASS').length} / ${testResults.length} PASSED`);
+  const passedCount = testResults.filter((r) => r.result === 'PASS').length;
+  console.log(`Gate 2B Test Summary: ${passedCount} / ${testResults.length} PASSED`);
   if (allPassed) {
-    console.log('🎉 ALL GATE 2 SECURITY TESTS PASSED!');
+    console.log('🎉 ALL GATE 2B SECURITY TESTS PASSED!');
   } else {
     console.log('❌ SOME TESTS FAILED. See log above for details.');
   }

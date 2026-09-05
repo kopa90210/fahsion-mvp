@@ -11,7 +11,8 @@
  *   - Group F: Invalid state transitions rejection & state immutability on failure
  *   - Group G: Cross-user transition attempts rejection by backend RPC & state immutability
  *   - Group H: Source photo -> wardrobe item provenance invariant enforcement
- *   - Group I: Failure and edge cases (unauthenticated, unknown items/photos, etc.)
+ *   - Group I: Concurrency serialization & row locking
+ *   - Group J: Failure and edge cases (unauthenticated, unknown items/photos, etc.)
  */
 
 import fs from 'node:fs';
@@ -125,27 +126,33 @@ async function main() {
   const userBId = authB.user.id;
   console.log(`✓ Authenticated User B: ${userBId}\n`);
 
-  // Fetch Test Fixtures for User A
-  const { data: userAPhotos, error: aPhotosErr } = await clientA
+  // Fetch Test Fixtures for User A (Filter specifically for active seeded items)
+  const { data: userAPhotos } = await clientA
     .from('source_photos')
     .select('id, user_id')
-    .limit(5);
+    .ilike('idempotency_key', 'gate2-test-a-%')
+    .order('created_at', { ascending: false })
+    .limit(1);
 
-  const { data: userAItems, error: aItemsErr } = await clientA
+  const { data: userAItems } = await clientA
     .from('user_wardrobe_items')
-    .select('item_id, wardrobe_items(id, source, processing_status, prettify_status, source_photo_id)')
-    .eq('user_id', userAId);
+    .select('item_id, wardrobe_items(id, source, processing_status, prettify_status, source_photo_id, display_name)')
+    .eq('user_id', userAId)
+    .order('added_at', { ascending: false });
 
   // Fetch Test Fixtures for User B
-  const { data: userBPhotos, error: bPhotosErr } = await clientB
+  const { data: userBPhotos } = await clientB
     .from('source_photos')
     .select('id, user_id')
-    .limit(5);
+    .ilike('idempotency_key', 'gate2-test-b-%')
+    .order('created_at', { ascending: false })
+    .limit(1);
 
-  const { data: userBItems, error: bItemsErr } = await clientB
+  const { data: userBItems } = await clientB
     .from('user_wardrobe_items')
-    .select('item_id, wardrobe_items(id, source, processing_status, prettify_status, source_photo_id)')
-    .eq('user_id', userBId);
+    .select('item_id, wardrobe_items(id, source, processing_status, prettify_status, source_photo_id, display_name)')
+    .eq('user_id', userBId)
+    .order('added_at', { ascending: false });
 
   // Curated Item
   const { data: curatedList } = await clientA
@@ -160,10 +167,14 @@ async function main() {
   }
 
   const sourcePhotoAId = userAPhotos[0].id;
-  const wardrobeItemAId = userAItems[0].item_id;
+  // Match the seeded test item for User A
+  const seededA = userAItems.find(i => i.wardrobe_items?.display_name === 'Gate2 Test Oxford Shirt A') || userAItems[0];
+  const wardrobeItemAId = seededA.item_id;
 
   const sourcePhotoBId = userBPhotos[0].id;
-  const wardrobeItemBId = userBItems[0].item_id;
+  // Match the seeded test item for User B
+  const seededB = userBItems.find(i => i.wardrobe_items?.display_name === 'Gate2 Test Dark Denim B') || userBItems[0];
+  const wardrobeItemBId = seededB.item_id;
 
   const curatedItemId = curatedList[0].id;
 
@@ -398,16 +409,20 @@ async function main() {
   // =========================================================================
   console.log('\n--- GROUP E: Backend Service-Role Authorized State Transitions ---');
 
-  // Reset Item A to 'detected' via service client
-  await serviceClient
-    .from('wardrobe_items')
-    .update({ processing_status: 'detected', prettify_status: 'none' })
-    .eq('id', wardrobeItemAId);
+  // Create a dedicated fresh draft item for Group E transitions via canonical provenance RPC
+  const { data: freshTestItemId, error: freshItemErr } = await clientA.rpc('create_draft_wardrobe_item', {
+    p_image_url: 'https://example.com/fresh-transition-test.jpg',
+    p_source_photo_id: sourcePhotoAId,
+  });
+  if (freshItemErr || !freshTestItemId) {
+    console.error('❌ Failed to create fresh draft item for Group E:', freshItemErr);
+    process.exit(1);
+  }
 
   // E1: Service-Role transition: detected -> isolating
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'isolating',
       p_user_id: userAId,
     });
@@ -418,7 +433,7 @@ async function main() {
   // E2: Service-Role transition: isolating -> isolated
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'isolated',
       p_user_id: userAId,
     });
@@ -429,7 +444,7 @@ async function main() {
   // E3: Service-Role transition: isolated -> extracting
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'extracting',
       p_user_id: userAId,
     });
@@ -440,7 +455,7 @@ async function main() {
   // E4: Service-Role transition: extracting -> extracted
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'extracted',
       p_user_id: userAId,
     });
@@ -451,7 +466,7 @@ async function main() {
   // E5: Service-Role Prettify: none -> processing
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_prettify_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'processing',
       p_user_id: userAId,
     });
@@ -462,7 +477,7 @@ async function main() {
   // E6: Service-Role Prettify: processing -> done
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_prettify_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'done',
       p_user_id: userAId,
     });
@@ -478,11 +493,11 @@ async function main() {
   // F1: extracted -> detected (invalid backward jump)
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'detected',
       p_user_id: userAId,
     });
-    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('processing_status').eq('id', wardrobeItemAId).single();
+    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('processing_status').eq('id', freshTestItemId).single();
     const pass = error != null && dbRow?.processing_status === 'extracted';
     recordResult(
       'Group F',
@@ -496,11 +511,11 @@ async function main() {
   // F2: Prettify done -> processing (invalid transition from terminal done)
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_prettify_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'processing',
       p_user_id: userAId,
     });
-    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('prettify_status').eq('id', wardrobeItemAId).single();
+    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('prettify_status').eq('id', freshTestItemId).single();
     const pass = error != null && dbRow?.prettify_status === 'done';
     recordResult(
       'Group F',
@@ -519,11 +534,11 @@ async function main() {
   // G1: Backend passes User B user_id for User A's item (processing)
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'failed',
       p_user_id: userBId,
     });
-    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('processing_status').eq('id', wardrobeItemAId).single();
+    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('processing_status').eq('id', freshTestItemId).single();
     const pass = error != null && dbRow?.processing_status === 'extracted';
     recordResult(
       'Group G',
@@ -537,11 +552,11 @@ async function main() {
   // G2: Backend passes User B user_id for User A's item (prettify)
   {
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_prettify_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'failed',
       p_user_id: userBId,
     });
-    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('prettify_status').eq('id', wardrobeItemAId).single();
+    const { data: dbRow } = await serviceClient.from('wardrobe_items').select('prettify_status').eq('id', freshTestItemId).single();
     const pass = error != null && dbRow?.prettify_status === 'done';
     recordResult(
       'Group G',
@@ -615,11 +630,49 @@ async function main() {
   }
 
   // =========================================================================
-  // GROUP I: Failure and Edge Cases
+  // GROUP I: Concurrency & Atomicity Tests
   // =========================================================================
-  console.log('\n--- GROUP I: Failure and Edge Cases ---');
+  console.log('\n--- GROUP I: Concurrency & Atomicity Verification ---');
 
-  // I1: Non-existent item UUID transition attempt by service-role
+  // I1: Concurrency Serialization (Two workers competing on same item)
+  {
+    const { data: concItemId } = await clientA.rpc('create_draft_wardrobe_item', {
+      p_image_url: 'https://example.com/conc-test.jpg',
+      p_source_photo_id: sourcePhotoAId,
+    });
+
+    const [res1, res2] = await Promise.allSettled([
+      serviceClient.rpc('transition_wardrobe_item_processing_state', {
+        p_item_id: concItemId,
+        p_target_status: 'isolating',
+        p_user_id: userAId,
+      }),
+      serviceClient.rpc('transition_wardrobe_item_processing_state', {
+        p_item_id: concItemId,
+        p_target_status: 'isolating',
+        p_user_id: userAId,
+      }),
+    ]);
+
+    // One must succeed, while the serialized second attempt fails (isolating -> isolating is invalid FSM)
+    const successCount = [res1, res2].filter(r => r.status === 'fulfilled' && !r.value.error).length;
+    const { data: concRow } = await serviceClient.from('wardrobe_items').select('processing_status').eq('id', concItemId).single();
+    const pass = successCount === 1 && concRow?.processing_status === 'isolating';
+    recordResult(
+      'Group I',
+      'Concurrent worker transition serialization (FOR UPDATE lock)',
+      'Exactly 1 transition committed, final state isolating',
+      `Successes: ${successCount}, Final DB State: ${concRow?.processing_status}`,
+      pass
+    );
+  }
+
+  // =========================================================================
+  // GROUP J: Failure and Edge Cases
+  // =========================================================================
+  console.log('\n--- GROUP J: Failure and Edge Cases ---');
+
+  // J1: Non-existent item UUID transition attempt by service-role
   {
     const fakeId = '00000000-0000-0000-0000-000000000000';
     const { data, error } = await serviceClient.rpc('transition_wardrobe_item_processing_state', {
@@ -628,21 +681,21 @@ async function main() {
       p_user_id: userAId,
     });
     const pass = error != null;
-    recordResult('Group I', 'Transition non-existent item UUID', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
+    recordResult('Group J', 'Transition non-existent item UUID', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
   }
 
-  // I2: Unauthenticated caller calls transition RPC
+  // J2: Unauthenticated caller calls transition RPC
   {
     const { data, error } = await anonClient.rpc('transition_wardrobe_item_processing_state', {
-      p_item_id: wardrobeItemAId,
+      p_item_id: freshTestItemId,
       p_target_status: 'isolating',
       p_user_id: userAId,
     });
     const pass = error != null;
-    recordResult('Group I', 'Unauthenticated caller calls transition RPC', 'Exception / 42501 (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
+    recordResult('Group J', 'Unauthenticated caller calls transition RPC', 'Exception / 42501 (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
   }
 
-  // I3: Draft creation with non-existent source photo UUID
+  // J3: Draft creation with non-existent source photo UUID
   {
     const fakePhotoId = '00000000-0000-0000-0000-000000000000';
     const { data, error } = await clientA.rpc('create_draft_wardrobe_item', {
@@ -650,7 +703,7 @@ async function main() {
       p_source_photo_id: fakePhotoId,
     });
     const pass = error != null;
-    recordResult('Group I', 'Draft creation with non-existent source photo', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
+    recordResult('Group J', 'Draft creation with non-existent source photo', 'Exception (DENIED)', error ? error.message : `Unexpected: ${data}`, pass);
   }
 
   // =========================================================================

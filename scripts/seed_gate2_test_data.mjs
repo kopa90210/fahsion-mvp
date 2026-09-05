@@ -64,7 +64,6 @@ async function getOrCreateUser(email, password) {
 
   const existing = usersData.users.find((u) => u.email === email);
   if (existing) {
-    // Ensure password is up to date
     await adminSupabase.auth.admin.updateUserById(existing.id, { password, email_confirm: true });
     return existing.id;
   }
@@ -96,13 +95,26 @@ async function seed() {
     });
   }
 
-  // 2. Clean up old test data with test idempotency keys
+  // 2. Clean up old test data cleanly
   console.log('🧹 Cleaning prior test fixtures...');
+  
+  // Find test wardrobe items
+  const { data: oldItems } = await adminSupabase
+    .from('wardrobe_items')
+    .select('id')
+    .ilike('display_name', 'Gate2 Test %');
+    
+  if (oldItems && oldItems.length > 0) {
+    const ids = oldItems.map(i => i.id);
+    await adminSupabase.from('user_wardrobe_items').delete().in('item_id', ids);
+    await adminSupabase.from('wardrobe_items').delete().in('id', ids);
+  }
+
   await adminSupabase
     .from('source_photos')
     .delete()
     .in('user_id', [userAId, userBId])
-    .like('idempotency_key', 'gate2-test-%');
+    .ilike('idempotency_key', 'gate2-test-%');
 
   // 3. Create Curated Catalog Item (for testing curated vs user_upload RLS)
   const { data: existingCurated } = await adminSupabase
@@ -140,7 +152,7 @@ async function seed() {
     .insert({
       user_id: userAId,
       image_url: 'https://example.com/user-a-source.jpg',
-      status: 'done',
+      status: 'uploading',
       idempotency_key: `gate2-test-a-${Date.now()}`,
       file_hash: 'hash-a-gate2',
     })
@@ -153,7 +165,7 @@ async function seed() {
     .insert({
       source_photo_id: photoA.id,
       image_url: 'https://example.com/user-a-crop.jpg',
-      display_name: 'User A Gate2 Oxford Shirt',
+      display_name: 'Gate2 Test Oxford Shirt A',
       source: 'user_upload',
       category: 'top',
       subcategory: 'shirt',
@@ -179,7 +191,7 @@ async function seed() {
     .insert({
       user_id: userBId,
       image_url: 'https://example.com/user-b-source.jpg',
-      status: 'done',
+      status: 'uploading',
       idempotency_key: `gate2-test-b-${Date.now()}`,
       file_hash: 'hash-b-gate2',
     })
@@ -192,7 +204,7 @@ async function seed() {
     .insert({
       source_photo_id: photoB.id,
       image_url: 'https://example.com/user-b-crop.jpg',
-      display_name: 'User B Gate2 Dark Denim',
+      display_name: 'Gate2 Test Dark Denim B',
       source: 'user_upload',
       category: 'bottom',
       subcategory: 'jeans',

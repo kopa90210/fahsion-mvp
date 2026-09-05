@@ -12,6 +12,14 @@ import {
   type WardrobeLayerRole,
 } from '@/src/lib/wardrobe/normalize';
 
+export const WARDROBE_LAYER_ROLES = [
+  'base_layer',
+  'bottom',
+  'footwear',
+  'outerwear',
+  'accessory',
+] as const;
+
 export {
   WARDROBE_CATEGORIES,
   type WardrobeCategory,
@@ -20,7 +28,7 @@ export {
 
 /**
  * Normalized 0..1 bounding box coordinates.
- * Invariants:
+ * Exact Invariants:
  *  - 0 <= x < 1
  *  - 0 <= y < 1
  *  - 0 < width <= 1
@@ -38,6 +46,10 @@ export type CropBox = {
 /**
  * Pipeline status enums aligned with database check constraints
  * from Phase 4B migrations (0014, 0015).
+ *
+ * NOTE on PrettifyStatus:
+ * Database persistence state machine: none -> processing -> done | failed.
+ * Client/execution-level omission is NOT persisted as 'skipped'.
  */
 export type ProcessingStatus =
   | 'detected'
@@ -90,6 +102,7 @@ export interface IsolationResult {
 /**
  * Stage 3: Extracted Wardrobe Attributes
  * Structured metadata extracted from the isolated garment image.
+ * All collections and scores are strictly typed without external SDK coupling.
  */
 export interface ExtractedAttributes {
   category: WardrobeCategory;
@@ -116,7 +129,7 @@ export interface ExtractedAttributes {
     fall?: number;
     winter?: number;
   };
-  layerRole?: WardrobeLayerRole | string | null;
+  layerRole?: WardrobeLayerRole | null;
 }
 
 /**
@@ -132,7 +145,17 @@ export interface ExtractionResult {
 
 /**
  * Stage 4: Optional Prettification Output
- * Result of optional background enhancement or garment restyling.
+ *
+ * Prettify Execution Status vs Database Persistence State:
+ *  - Execution Result (PrettifyResult.status):
+ *      'done': Prettification succeeded, prettified image URL available.
+ *      'failed': Prettification attempted but failed with error.
+ *      'skipped': Optional stage omitted by pipeline/caller.
+ *
+ *  - Database Persistence State (PrettifyStatus in wardrobe_items.prettify_status):
+ *      Allowed check constraints: ('none', 'processing', 'done', 'failed').
+ *      'skipped' is an in-memory execution result concept ONLY. When prettify
+ *      is skipped/omitted, the database status remains 'none'.
  */
 export interface PrettifyResult {
   status: 'done' | 'failed' | 'skipped';

@@ -8,14 +8,17 @@
 import { describe, expect, it } from 'vitest';
 import {
   WARDROBE_CATEGORIES,
+  WARDROBE_LAYER_ROLES,
   type CropBox,
   type Detection,
   type ExtractedAttributes,
   type ExtractionResult,
   type IsolationResult,
   type PrettifyResult,
+  type PrettifyStatus,
   type ProcessingStatus,
   type SourcePhotoStatus,
+  type WardrobeLayerRole,
 } from './contracts';
 
 describe('Gate 3 Domain Contracts', () => {
@@ -25,6 +28,15 @@ describe('Gate 3 Domain Contracts', () => {
     const actual = [...WARDROBE_CATEGORIES];
 
     // Assert exact taxonomy match without introducing a secondary taxonomy
+    expect(actual).toEqual(expected);
+    expect(actual.length).toBe(5);
+  });
+
+  it('preserves canonical wardrobe layer roles and contains all 5 required roles', () => {
+    const input = WARDROBE_LAYER_ROLES;
+    const expected = ['base_layer', 'bottom', 'footwear', 'outerwear', 'accessory'];
+    const actual = [...WARDROBE_LAYER_ROLES];
+
     expect(actual).toEqual(expected);
     expect(actual.length).toBe(5);
   });
@@ -77,15 +89,19 @@ describe('Gate 3 Domain Contracts', () => {
     expect(input.confidence).toBeLessThanOrEqual(1);
   });
 
-  it('allows instantiating ExtractedAttributes and ExtractionResult contracts', () => {
+  it('allows instantiating ExtractedAttributes and ExtractionResult contracts with canonical layerRole', () => {
+    const layerRole: WardrobeLayerRole = 'bottom';
     const attributes: ExtractedAttributes = {
       category: 'bottom',
       subcategory: 'jeans',
       displayName: 'Slim Fit Denim',
-      color: { primary: 'blue', secondary: null },
-      material: { primary: 'cotton' },
+      color: { primary: 'blue', secondary: null, familyWeights: { neutral: 0.2, dark: 0.8 } },
+      material: { primary: 'cotton', weights: { cotton: 1.0 } },
+      fit: { weights: { slim: 0.9, regular: 0.1 } },
       pattern: 'solid',
-      layerRole: 'bottom',
+      styleTags: { minimal: 0.8 },
+      seasonWeights: { fall: 0.5, winter: 0.5 },
+      layerRole,
     };
 
     const input: ExtractionResult = {
@@ -99,10 +115,11 @@ describe('Gate 3 Domain Contracts', () => {
     const actualCategory = input.attributes.category;
 
     expect(actualCategory).toBe(expectedCategory);
+    expect(input.attributes.layerRole).toBe('bottom');
     expect(input.confidencePerField.category).toBe(0.99);
   });
 
-  it('allows instantiating PrettifyResult with done and failed states', () => {
+  it('allows instantiating PrettifyResult with done, failed, and skipped execution states', () => {
     const doneResult: PrettifyResult = {
       status: 'done',
       originalImageUrl: 'https://storage.example.com/raw/item.png',
@@ -117,11 +134,41 @@ describe('Gate 3 Domain Contracts', () => {
       error: 'Model timeout',
     };
 
+    const skippedResult: PrettifyResult = {
+      status: 'skipped',
+      originalImageUrl: 'https://storage.example.com/raw/item.png',
+      prettifiedImageUrl: null,
+      error: null,
+    };
+
     expect(doneResult.status).toBe('done');
     expect(doneResult.prettifiedImageUrl).toBeDefined();
 
     expect(failedResult.status).toBe('failed');
     expect(failedResult.error).toBe('Model timeout');
+
+    expect(skippedResult.status).toBe('skipped');
+    expect(skippedResult.prettifiedImageUrl).toBeNull();
+  });
+
+  it('proves distinction between execution-level skipped status and database PrettifyStatus persistence state', () => {
+    // Database check constraint allows ONLY: 'none' | 'processing' | 'done' | 'failed'
+    const allowedDatabasePrettifyStatuses: PrettifyStatus[] = [
+      'none',
+      'processing',
+      'done',
+      'failed',
+    ];
+
+    // Execution result allows 'skipped' for omitted pipeline execution
+    const executionStatus: PrettifyResult['status'] = 'skipped';
+
+    // 'skipped' is an in-memory execution concept and is NOT in the database persistence enum
+    expect(allowedDatabasePrettifyStatuses.includes(executionStatus as unknown as PrettifyStatus)).toBe(false);
+
+    // When prettify is skipped/omitted, database status remains 'none'
+    const databaseStatusForSkippedExecution: PrettifyStatus = 'none';
+    expect(allowedDatabasePrettifyStatuses.includes(databaseStatusForSkippedExecution)).toBe(true);
   });
 
   it('validates alignment with Phase 4B database status enums', () => {

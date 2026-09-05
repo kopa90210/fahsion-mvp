@@ -3,13 +3,16 @@
  *
  * Strict validation routines for pipeline domain contracts and external AI outputs.
  * In accordance with Gate 3 requirements:
- *  - Rejects invalid values and malformed responses.
- *  - Does not silently repair or guess missing data.
- *  - Provides structured error details without coupling to database/SDKs.
+ *  - Enforces exact CropBox invariants without tolerance.
+ *  - Enforces strict canonical validation of layerRole.
+ *  - Validates all numeric weight collections with granular paths.
+ *  - Rejects malformed objects, arrays, nulls, NaN, Infinity, negative, or > 1 values.
+ *  - Does not silently repair, clamp, or guess missing data.
  */
 
 import {
   WARDROBE_CATEGORIES,
+  WARDROBE_LAYER_ROLES,
   type CropBox,
   type Detection,
   type ExtractedAttributes,
@@ -17,6 +20,7 @@ import {
   type IsolationResult,
   type PrettifyResult,
   type WardrobeCategory,
+  type WardrobeLayerRole,
 } from './contracts';
 
 export interface ValidationErrorDetail {
@@ -51,22 +55,20 @@ export function assertValid<T>(result: ValidationResult<T>, contextName = 'Valid
   return result.data;
 }
 
-const EPSILON = 1e-9;
-
 /**
- * Validates CropBox coordinates and invariants:
+ * Validates CropBox coordinates according to the exact contract invariants:
  *  - 0 <= x < 1
  *  - 0 <= y < 1
  *  - 0 < width <= 1
  *  - 0 < height <= 1
- *  - x + width <= 1
- *  - y + height <= 1
+ *  - x + width <= 1 (exact boundary, zero tolerance)
+ *  - y + height <= 1 (exact boundary, zero tolerance)
  *  - All values must be finite numbers
  */
 export function validateCropBox(box: unknown, basePath = 'box'): ValidationResult<CropBox> {
   const errors: ValidationErrorDetail[] = [];
 
-  if (typeof box !== 'object' || box === null) {
+  if (typeof box !== 'object' || box === null || Array.isArray(box)) {
     return {
       success: false,
       errors: [{ path: basePath, message: 'CropBox must be a non-null object', received: box }],
@@ -118,8 +120,8 @@ export function validateCropBox(box: unknown, basePath = 'box'): ValidationResul
     errors.push({ path: `${basePath}.height`, message: 'height must satisfy 0 < height <= 1', received: nh });
   }
 
-  // Invariant: x + width <= 1
-  if (nx + nw > 1 + EPSILON) {
+  // Exact Invariant: x + width <= 1 (exact, no tolerance)
+  if (nx + nw > 1) {
     errors.push({
       path: `${basePath}.x + width`,
       message: 'x + width must satisfy x + width <= 1',
@@ -127,8 +129,8 @@ export function validateCropBox(box: unknown, basePath = 'box'): ValidationResul
     });
   }
 
-  // Invariant: y + height <= 1
-  if (ny + nh > 1 + EPSILON) {
+  // Exact Invariant: y + height <= 1 (exact, no tolerance)
+  if (ny + nh > 1) {
     errors.push({
       path: `${basePath}.y + height`,
       message: 'y + height must satisfy y + height <= 1',
@@ -224,13 +226,72 @@ export function validateCategory(
 }
 
 /**
+ * Validates wardrobe layer role against canonical layer roles.
+ */
+export function validateLayerRole(
+  role: unknown,
+  path = 'layerRole'
+): ValidationResult<WardrobeLayerRole> {
+  if (typeof role !== 'string' || !WARDROBE_LAYER_ROLES.includes(role as WardrobeLayerRole)) {
+    return {
+      success: false,
+      errors: [
+        {
+          path,
+          message: `Layer role must be one of: ${WARDROBE_LAYER_ROLES.join(', ')}`,
+          received: role,
+        },
+      ],
+    };
+  }
+
+  return { success: true, data: role as WardrobeLayerRole };
+}
+
+/**
+ * Helper to validate a map of numeric weights (e.g. familyWeights, material.weights, fit.weights, styleTags, seasonWeights).
+ * Every value must be a finite number between 0 and 1.
+ */
+function validateNumericWeightMap(
+  map: unknown,
+  path: string,
+  errors: ValidationErrorDetail[]
+): void {
+  if (typeof map !== 'object' || map === null || Array.isArray(map)) {
+    errors.push({
+      path,
+      message: `${path} must be a non-null object with numeric weights between 0 and 1`,
+      received: map,
+    });
+    return;
+  }
+
+  for (const [key, val] of Object.entries(map as Record<string, unknown>)) {
+    const fieldPath = `${path}.${key}`;
+    if (typeof val !== 'number' || !Number.isFinite(val)) {
+      errors.push({
+        path: fieldPath,
+        message: `${fieldPath} must be a finite number`,
+        received: val,
+      });
+    } else if (val < 0 || val > 1) {
+      errors.push({
+        path: fieldPath,
+        message: `${fieldPath} must be between 0 and 1 inclusive`,
+        received: val,
+      });
+    }
+  }
+}
+
+/**
  * Validates a single Detection output.
  */
 export function validateDetection(
   detection: unknown,
   basePath = 'detection'
 ): ValidationResult<Detection> {
-  if (typeof detection !== 'object' || detection === null) {
+  if (typeof detection !== 'object' || detection === null || Array.isArray(detection)) {
     return {
       success: false,
       errors: [{ path: basePath, message: 'Detection must be a non-null object', received: detection }],
@@ -308,7 +369,7 @@ export function validateIsolationResult(
   result: unknown,
   basePath = 'isolationResult'
 ): ValidationResult<IsolationResult> {
-  if (typeof result !== 'object' || result === null) {
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
     return {
       success: false,
       errors: [{ path: basePath, message: 'IsolationResult must be a non-null object', received: result }],
@@ -344,12 +405,19 @@ export function validateIsolationResult(
 /**
  * Validates ExtractedAttributes.
  * Enforces required fields: category, displayName, color (with primary).
+ * Strictly validates all numeric collections:
+ *   - color.familyWeights
+ *   - material.weights
+ *   - fit.weights
+ *   - styleTags
+ *   - seasonWeights
+ * Enforces canonical layerRole if provided.
  */
 export function validateExtractedAttributes(
   attrs: unknown,
   basePath = 'attributes'
 ): ValidationResult<ExtractedAttributes> {
-  if (typeof attrs !== 'object' || attrs === null) {
+  if (typeof attrs !== 'object' || attrs === null || Array.isArray(attrs)) {
     return {
       success: false,
       errors: [{ path: basePath, message: 'ExtractedAttributes must be a non-null object', received: attrs }],
@@ -373,7 +441,7 @@ export function validateExtractedAttributes(
   }
 
   // Required: color with primary
-  if (typeof a.color !== 'object' || a.color === null) {
+  if (typeof a.color !== 'object' || a.color === null || Array.isArray(a.color)) {
     errors.push({
       path: `${basePath}.color`,
       message: 'color is required and must be an object with primary color',
@@ -388,9 +456,75 @@ export function validateExtractedAttributes(
         received: col.primary,
       });
     }
+    if (col.secondary !== undefined && col.secondary !== null && typeof col.secondary !== 'string') {
+      errors.push({
+        path: `${basePath}.color.secondary`,
+        message: 'color.secondary if provided must be a string or null',
+        received: col.secondary,
+      });
+    }
+    // Validate color.familyWeights numeric map if present
+    if (col.familyWeights !== undefined) {
+      validateNumericWeightMap(col.familyWeights, `${basePath}.color.familyWeights`, errors);
+    }
   }
 
-  // Optional subcategory check
+  // Optional: material and material.weights
+  if (a.material !== undefined) {
+    if (typeof a.material !== 'object' || a.material === null || Array.isArray(a.material)) {
+      errors.push({
+        path: `${basePath}.material`,
+        message: 'material if provided must be a non-null object',
+        received: a.material,
+      });
+    } else {
+      const mat = a.material as Record<string, unknown>;
+      if (mat.primary !== undefined && mat.primary !== null && typeof mat.primary !== 'string') {
+        errors.push({
+          path: `${basePath}.material.primary`,
+          message: 'material.primary if provided must be a string',
+          received: mat.primary,
+        });
+      }
+      if (mat.weights !== undefined) {
+        validateNumericWeightMap(mat.weights, `${basePath}.material.weights`, errors);
+      }
+    }
+  }
+
+  // Optional: fit and fit.weights
+  if (a.fit !== undefined) {
+    if (typeof a.fit !== 'object' || a.fit === null || Array.isArray(a.fit)) {
+      errors.push({
+        path: `${basePath}.fit`,
+        message: 'fit if provided must be a non-null object',
+        received: a.fit,
+      });
+    } else {
+      const fitObj = a.fit as Record<string, unknown>;
+      if (fitObj.weights !== undefined) {
+        validateNumericWeightMap(fitObj.weights, `${basePath}.fit.weights`, errors);
+      }
+    }
+  }
+
+  // Optional: styleTags numeric map
+  if (a.styleTags !== undefined) {
+    validateNumericWeightMap(a.styleTags, `${basePath}.styleTags`, errors);
+  }
+
+  // Optional: seasonWeights numeric map
+  if (a.seasonWeights !== undefined) {
+    validateNumericWeightMap(a.seasonWeights, `${basePath}.seasonWeights`, errors);
+  }
+
+  // Optional: canonical layerRole
+  if (a.layerRole !== undefined && a.layerRole !== null) {
+    const lrRes = validateLayerRole(a.layerRole, `${basePath}.layerRole`);
+    if (!lrRes.success) errors.push(...lrRes.errors);
+  }
+
+  // Optional: subcategory check
   if (a.subcategory !== undefined && a.subcategory !== null && typeof a.subcategory !== 'string') {
     errors.push({
       path: `${basePath}.subcategory`,
@@ -399,9 +533,23 @@ export function validateExtractedAttributes(
     });
   }
 
-  // Optional formalityScore check
+  // Optional: pattern check
+  if (a.pattern !== undefined && a.pattern !== null && typeof a.pattern !== 'string') {
+    errors.push({
+      path: `${basePath}.pattern`,
+      message: 'pattern if provided must be a string or null',
+      received: a.pattern,
+    });
+  }
+
+  // Optional: formalityScore check
   if (a.formalityScore !== undefined && a.formalityScore !== null) {
-    if (typeof a.formalityScore !== 'number' || !Number.isFinite(a.formalityScore) || a.formalityScore < 0 || a.formalityScore > 1) {
+    if (
+      typeof a.formalityScore !== 'number' ||
+      !Number.isFinite(a.formalityScore) ||
+      a.formalityScore < 0 ||
+      a.formalityScore > 1
+    ) {
       errors.push({
         path: `${basePath}.formalityScore`,
         message: 'formalityScore if provided must be a finite number between 0 and 1',
@@ -428,7 +576,7 @@ export function validateExtractionResult(
   result: unknown,
   basePath = 'extractionResult'
 ): ValidationResult<ExtractionResult> {
-  if (typeof result !== 'object' || result === null) {
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
     return {
       success: false,
       errors: [{ path: basePath, message: 'ExtractionResult must be a non-null object', received: result }],
@@ -480,13 +628,16 @@ export function validateExtractionResult(
 
 /**
  * Validates PrettifyResult.
- * Ensures status is valid and if 'done', prettifiedImageUrl is present and valid.
+ * Ensures status is valid:
+ *  - 'done': prettifiedImageUrl is present and valid
+ *  - 'failed': error string must be non-empty
+ *  - 'skipped': valid execution result when stage is omitted (not persisted)
  */
 export function validatePrettifyResult(
   result: unknown,
   basePath = 'prettifyResult'
 ): ValidationResult<PrettifyResult> {
-  if (typeof result !== 'object' || result === null) {
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) {
     return {
       success: false,
       errors: [{ path: basePath, message: 'PrettifyResult must be a non-null object', received: result }],

@@ -2,14 +2,15 @@
  * Phase 4B Gate 4: Image Cropping Utility
  *
  * Performs local, server-side image cropping using normalized bounding boxes.
+ * Uses sharp for Node.js server-side image processing.
  * No external API calls required.
  *
  * Supports:
- *   - Data URLs (for base64-encoded images)
- *   - HTTP/HTTPS URLs (returns URL-accessible cropped result)
+ *   - HTTP/HTTPS URLs (fetches and crops)
+ *   - Local file paths
  *   - Normalized box coordinates (0..1)
  *
- * Returns a data URL with the cropped image as a PNG.
+ * Returns a base64-encoded PNG of the cropped region.
  */
 
 import type { CropBox } from '../../contracts';
@@ -17,18 +18,16 @@ import type { CropBox } from '../../contracts';
 /**
  * Crops an image using a normalized CropBox.
  *
- * For server-side usage with node.js, we'll return a data URL.
- * For browser usage, we can use Canvas API.
+ * Implementation uses sharp for Node.js server-side processing.
+ * Fetches image from URL, crops to normalized box region, returns as base64 PNG.
  *
- * Note: This implementation works in browser contexts.
- * For Node.js server-side, you would need a library like jimp or sharp.
- * For this Gate 4, we provide the interface and browser implementation.
+ * @param imageUrl - Image URL or local file path
+ * @param box - Normalized bounding box [0..1]
+ * @returns Base64-encoded PNG of cropped region
+ * @throws Error if image cannot be loaded or cropping fails
  */
-export async function cropImage(
-  imageUrl: string,
-  box: CropBox
-): Promise<string> {
-  // Validation is already done by the caller, but let's be defensive
+export async function cropImage(imageUrl: string, box: CropBox): Promise<string> {
+  // Defensive validation
   if (box.x < 0 || box.y < 0 || box.width <= 0 || box.height <= 0) {
     throw new Error('Invalid crop box: coordinates must be normalized');
   }
@@ -36,70 +35,69 @@ export async function cropImage(
     throw new Error('Invalid crop box: box exceeds image bounds');
   }
 
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
+  try {
+    // Dynamically import sharp (Node.js only)
+    const sharp = await import('sharp');
+    const sharpLib = sharp.default;
 
-    img.onload = () => {
-      try {
-        // Convert normalized coordinates to pixel coordinates
-        const pixelX = Math.floor(box.x * img.width);
-        const pixelY = Math.floor(box.y * img.height);
-        const pixelWidth = Math.ceil(box.width * img.width);
-        const pixelHeight = Math.ceil(box.height * img.height);
+    // Fetch image or load from path
+    let imageBuffer: Buffer;
 
-        // Create canvas and crop
-        const canvas = document.createElement('canvas');
-        canvas.width = pixelWidth;
-        canvas.height = pixelHeight;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Failed to get 2D context from canvas'));
-          return;
-        }
-
-        ctx.drawImage(
-          img,
-          pixelX,
-          pixelY,
-          pixelWidth,
-          pixelHeight,
-          0,
-          0,
-          pixelWidth,
-          pixelHeight
-        );
-
-        // Convert to data URL
-        const dataUrl = canvas.toDataURL('image/png');
-        resolve(dataUrl);
-      } catch (error) {
-        reject(error);
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      // Fetch from URL
+      const response = await fetch(imageUrl);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
       }
-    };
+      imageBuffer = Buffer.from(await response.arrayBuffer());
+    } else {
+      // Load from local file system
+      const fs = await import('fs/promises');
+      imageBuffer = await fs.readFile(imageUrl);
+    }
 
-    img.onerror = () => {
-      reject(new Error(`Failed to load image: ${imageUrl}`));
-    };
+    // Get image metadata to convert normalized coords to pixels
+    const metadata = await sharpLib(imageBuffer).metadata();
+    if (!metadata.width || !metadata.height) {
+      throw new Error('Cannot determine image dimensions');
+    }
 
-    img.src = imageUrl;
-  });
+    // Convert normalized box to pixel coordinates
+    const pixelX = Math.round(box.x * metadata.width);
+    const pixelY = Math.round(box.y * metadata.height);
+    const pixelWidth = Math.round(box.width * metadata.width);
+    const pixelHeight = Math.round(box.height * metadata.height);
+
+    // Crop and encode as PNG
+    const croppedBuffer = await sharpLib(imageBuffer)
+      .extract({
+        left: pixelX,
+        top: pixelY,
+        width: pixelWidth,
+        height: pixelHeight,
+      })
+      .png()
+      .toBuffer();
+
+    // Return as base64 data URL
+    return `data:image/png;base64,${croppedBuffer.toString('base64')}`;
+  } catch (error) {
+    if (error instanceof Error) {
+      throw new Error(`Image cropping failed: ${error.message}`);
+    }
+    throw error;
+  }
 }
 
 /**
- * Server-side variant placeholder.
- * For production server-side cropping, integrate with sharp or jimp.
- * This is marked for future implementation.
+ * Legacy variant for reference.
+ * Kept for backward compatibility but delegates to main cropImage().
  *
- * @deprecated Use Node.js image library (sharp, jimp) for server-side
+ * @deprecated Use cropImage() instead; it now handles Node.js natively
  */
 export async function cropImageNodeServer(
   imageUrl: string,
   box: CropBox
 ): Promise<string> {
-  throw new Error(
-    'Server-side image cropping requires sharp or jimp. ' +
-      'Install with: npm install sharp (or jimp) and implement this function.'
-  );
+  return cropImage(imageUrl, box);
 }

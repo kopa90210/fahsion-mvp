@@ -215,10 +215,40 @@ ${JSON.stringify({ detections: [detection] })}
     expect(result[1].category).toBe('bottom');
     expect(result[2].category).toBe('footwear');
   });
+
+  it('REGRESSION: Category mismatch with perfect IoU should not match (TP=0, FP=1, FN=1)', async () => {
+    // BLOCKER FIX: Verify that matching requires BOTH category match AND IoU threshold
+    // Test case: GT=top, prediction=bottom, IoU=1.0 (perfect overlap but wrong category)
+    // Expected: TP=0, FP=1 (prediction not matched), FN=1 (ground truth not matched)
+    const { evaluateDetection } = await import('../../evaluation/metrics');
+
+    const prediction: Detection = {
+      category: 'bottom', // Wrong category
+      box: { x: 0.2, y: 0.1, width: 0.6, height: 0.4 }, // Exact same box
+      confidence: 0.95,
+    };
+
+    const groundTruth = {
+      category: 'top', // Expected category
+      box: { x: 0.2, y: 0.1, width: 0.6, height: 0.4 }, // Exact same box (IoU=1.0)
+    };
+
+    const example = { image: 'test.jpg', expected: { garments: [groundTruth] } };
+    const result = evaluateDetection(example, [prediction], 0.5);
+
+    // Category mismatch should prevent matching even with perfect IoU
+    expect(result.tp).toBe(0); // Not matched due to category mismatch
+    expect(result.fp).toBe(1); // Prediction unmatched = false positive
+    expect(result.fn).toBe(1); // Ground truth unmatched = false negative
+    expect(result.precision).toBe(0); // 0 / (0 + 1) = 0
+    expect(result.recall).toBe(0); // 0 / (0 + 1) = 0
+    expect(result.f1Score).toBe(0); // 0 when recall=0
+  });
 });
 
 describe('Real Groq Adapters — Live Provider Tests (opt-in)', () => {
   let transport: GroqVisionTransport;
+  let configError: Error | null = null;
   const liveTestEnabled = process.env.AI_LIVE_TEST === 'true';
 
   beforeAll(() => {
@@ -227,10 +257,26 @@ describe('Real Groq Adapters — Live Provider Tests (opt-in)', () => {
         transport = GroqVisionTransport.fromEnv();
         console.log('✓ Live provider test configured');
       } catch (error) {
-        console.warn('⚠️  Live provider test skipped: Missing AI_PROVIDER_API_KEY or AI_PROVIDER_MODEL');
+        configError = error instanceof Error ? error : new Error(String(error));
+        console.error('✗ Live provider test FAILED: Configuration error detected');
+        console.error(`  ${configError.message}`);
       }
     }
   });
+
+  it.skipIf(!liveTestEnabled)(
+    'BLOCKER: fails with clear error when AI_LIVE_TEST=true but credentials missing',
+    async () => {
+      // BLOCKER FIX: Verify that missing configuration is caught early with clear error message
+      if (configError) {
+        expect(configError.message).toContain('AI_PROVIDER');
+        throw new Error(
+          `Configuration missing for live tests: ${configError.message}. ` +
+          'Set AI_PROVIDER_API_KEY and AI_PROVIDER_MODEL in .env to enable.'
+        );
+      }
+    }
+  );
 
   it.skipIf(!liveTestEnabled)('makes real Groq detection request', async () => {
     if (!transport) throw new Error('Transport not configured');

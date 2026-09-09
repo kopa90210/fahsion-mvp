@@ -32,8 +32,12 @@ interface MatchedDetection {
 
 /**
  * Greedy one-to-one bipartite matching between predictions and ground truth.
- * Uses IoU threshold to determine if a match is valid.
- * Returns the best non-overlapping assignments.
+ * 
+ * A candidate is eligible ONLY when:
+ *   1. prediction.category === groundTruth.category (exact category match)
+ *   2. AND IoU >= threshold (spatial overlap requirement)
+ *
+ * Returns the best non-overlapping assignments, sorted by IoU.
  */
 function greedyMatch(
   predictions: Detection[],
@@ -58,7 +62,8 @@ function greedyMatch(
       const iou = intersectionOverUnion(predictions[i].box, groundTruths[j].box);
       const categoryMatch = predictions[i].category === groundTruths[j].category;
 
-      if (iou >= iouThreshold) {
+      // BLOCKER: Candidate is eligible ONLY if BOTH category matches AND IoU threshold met
+      if (categoryMatch && iou >= iouThreshold) {
         candidates.push({
           predIdx: i,
           truthIdx: j,
@@ -82,7 +87,7 @@ function greedyMatch(
         prediction: candidate.pred,
         groundTruth: candidate.truth,
         iou: candidate.iou,
-        categoryMatch: candidate.pred.category === candidate.truth.category,
+        categoryMatch: true, // Always true since we only add matching categories
       });
     }
   }

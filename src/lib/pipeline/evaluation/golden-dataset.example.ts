@@ -1,7 +1,9 @@
 /**
- * Phase 4B Gate 4: Golden Dataset Example
+ * Phase 4B Gate 4: Golden Dataset Example (REFERENCE FORMAT ONLY)
  *
- * This file demonstrates the expected format for evaluation datasets.
+ * This file demonstrates the EXPECTED FORMAT for evaluation datasets.
+ * No real labeled images have been evaluated yet.
+ *
  * Each example contains:
  *   - image: URL or path to the image
  *   - expected: Object with garments array
@@ -15,6 +17,9 @@
  *   - 0 < height <= 1
  *   - x + width <= 1
  *   - y + height <= 1
+ *
+ * BLOCKER FIX: Do not claim metrics until real labeled images are evaluated.
+ * These examples are provided for reference only.
  */
 
 import type { GoldenExample, GoldenDataset } from './types';
@@ -140,8 +145,15 @@ export const goldenEmptyExample: GoldenExample = {
 };
 
 /**
- * Sample golden dataset for initial evaluation.
- * Start with 5-10 examples, expand to 50-100 over time.
+ * Sample golden dataset format reference.
+ * DO NOT claim metrics from these examples - they are placeholders only.
+ * Real metrics can ONLY be computed after evaluating against real, manually-labeled images.
+ *
+ * Gate 5 should:
+ *   1. Curate actual labeled images (50-100 test cases)
+ *   2. Run evaluateDetection() on each with model predictions
+ *   3. Aggregate results to get mean precision, recall, F1, meanIoU
+ *   4. Report metrics as "Evaluated on X real labeled images"
  */
 export const sampleGoldenDataset: GoldenDataset = [
   goldenSingleTopExample,
@@ -151,13 +163,45 @@ export const sampleGoldenDataset: GoldenDataset = [
   goldenEmptyExample,
 ];
 
+
 /**
- * Example of how to evaluate detections against the golden dataset:
+ * How to use evaluateDetection() once real labeled images are available:
+ *
+ * IMPORTANT: Only compute metrics AFTER you have real labeled images.
+ * DO NOT extrapolate from example instances shown above.
+ *
+ * Gate 5 workflow:
+ * 1. Collect actual images with manual labels (50-100 images)
+ * 2. For each labeled image, run detector and call evaluateDetection()
+ * 3. Aggregate TP/FP/FN across all images
+ * 4. Report final precision, recall, F1, meanIoU
+ *
+ * Example:
  *
  * ```typescript
  * import { evaluateDetection } from './metrics';
+ * import type { GoldenExample } from './types';
  *
- * for (const example of sampleGoldenDataset) {
+ * const realLabeledDataset: GoldenExample[] = [
+ *   // Load from file or fetch from server
+ *   // { image: 'path-to-real-labeled-1.jpg', expected: { garments: [...] } },
+ *   // { image: 'path-to-real-labeled-2.jpg', expected: { garments: [...] } },
+ * ];
+ *
+ * let totalTP = 0, totalFP = 0, totalFN = 0;
+ *
+ * for (const example of realLabeledDataset) {
  *   const predictions = await detector.detect(example.image);
  *   const result = evaluateDetection(example, predictions);
- *   console.log(`Image: ${example.image}`);</n *   console.log(`  Precision: ${result.precision.toFixed(2)}`);\n *   console.log(`  Recall: ${result.recall.toFixed(2)}`);\n *   console.log(`  F1: ${result.f1Score.toFixed(2)}`);\n *   console.log(`  Mean IoU: ${result.meanIoU.toFixed(3)}`);\n * }\n * ```\n */\n
+ *   totalTP += result.tp;
+ *   totalFP += result.fp;
+ *   totalFN += result.fn;
+ * }
+ *
+ * const precision = totalTP / (totalTP + totalFP);
+ * const recall = totalTP / (totalTP + totalFN);
+ * console.log(`Evaluated on ${realLabeledDataset.length} real images:`);
+ * console.log(`  Precision: ${precision.toFixed(2)}`);
+ * console.log(`  Recall: ${recall.toFixed(2)}`);
+ * ```
+ */

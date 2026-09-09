@@ -3,15 +3,25 @@ import { assertValid, validateDetections, validateImageUrl } from '../../validat
 import type { GarmentDetector } from '../detector';
 import { DETECTION_PROMPT } from '../prompts';
 import { parseDetectionResponse } from './parsing';
-import type { AIProviderTransport } from './transport';
+import type { GroqVisionTransport } from './groq-transport';
 
-export class RealDetector implements GarmentDetector {
-  constructor(private readonly transport: AIProviderTransport) {}
+export class RealGroqDetector implements GarmentDetector {
+  constructor(private readonly transport: GroqVisionTransport) {}
 
   async detect(imageUrl: string): Promise<Detection[]> {
     assertValid(validateImageUrl(imageUrl, 'imageUrl'), 'Detector input');
-    const raw = await this.transport.generate({ stage: 'detection', imageUrl, prompt: DETECTION_PROMPT });
+    
+    // Call Groq vision API
+    const raw = await this.transport.generate({
+      imageUrl,
+      prompt: DETECTION_PROMPT,
+    });
+
+    // Parse response (handles markdown, nested JSON, etc.)
     const parsed = parseDetectionResponse(raw);
-    return assertValid(validateDetections(parsed), 'RealDetector');
+    
+    // Validate against Gate 3 contract
+    return assertValid(validateDetections(parsed), 'RealGroqDetector');
   }
 }
+

@@ -1,0 +1,6 @@
+export const DETECTION_PROMPT = `Detect all visible wearable garments. Do not invent hidden garments. Use only these canonical categories: top, bottom, footwear, outerwear, accessory. Return normalized 0..1 bounding boxes, confidence in [0,1], and optional labels. Return machine-readable JSON only, with no markdown or explanatory prose.`;
+
+export const EXTRACTION_PROMPT = `Analyze the isolated garment and return JSON matching the extraction contract. Identify category, likely garment type, display name, primary color, justified secondary color, material, fit, pattern, style tags, formality, seasonal suitability, layer role, and confidence values. Use only canonical categories and layer roles. When uncertain, use conservative values. Do not fabricate brand, price, hidden details, or exact fabric composition.`;
+
+export const ISOLATION_PROMPT = `Crop the source image using the supplied normalized box, remove the background, and return JSON with rawImageUrl, the unchanged box, and confidence in [0,1].`;
+export const PRETTIFY_PROMPT = `Optionally improve presentation of the garment image. Return JSON with status done, failed, or skipped, originalImageUrl, optional prettifiedImageUrl, and error when failed.`;

@@ -2,6 +2,7 @@
 
 import { createClient } from '@/src/lib/supabase/server'
 import { normalizeWardrobeItem } from '@/src/lib/wardrobe/normalize'
+import { removeImageBackground } from '@/src/lib/background-removal/service'
 
 // ---------------------------------------------------------------------------
 // Public types — the only shape the frontend ever sees
@@ -124,9 +125,10 @@ export async function updateWardrobeItemAttributes(itemId: string, updates: Ward
 
 export async function replaceWardrobeItemPhoto(itemId: string, imageFile: File) {
   const { supabase, userId } = await getAuthenticatedClient()
-  const extension = imageFile.name.split('.').pop()?.toLowerCase() || 'jpg'
+  const processedImage = await removeImageBackground(imageFile)
+  const extension = processedImage.name.split('.').pop()?.toLowerCase() || 'png'
   const path = `${userId}/${crypto.randomUUID()}.${extension}`
-  const { error: uploadError } = await supabase.storage.from('wardrobe-images').upload(path, imageFile, { contentType: imageFile.type })
+  const { error: uploadError } = await supabase.storage.from('wardrobe-images').upload(path, processedImage, { contentType: processedImage.type })
   if (uploadError) throw new Error('Could not upload wardrobe image')
   const { data: urlData } = supabase.storage.from('wardrobe-images').getPublicUrl(path)
   const { error } = await supabase.from('wardrobe_items').update({ image_url: urlData.publicUrl }).eq('id', itemId)
@@ -151,9 +153,10 @@ export async function updateItemQuantity(itemId: string, quantity: number) {
 
 export async function uploadDraftWardrobeItem(imageFile: File) {
   const { supabase, userId } = await getAuthenticatedClient()
-  const extension = imageFile.name.split('.').pop()?.toLowerCase() || 'jpg'
+  const processedImage = await removeImageBackground(imageFile)
+  const extension = processedImage.name.split('.').pop()?.toLowerCase() || 'png'
   const path = `${userId}/${crypto.randomUUID()}.${extension}`
-  const { error: uploadError } = await supabase.storage.from('wardrobe-images').upload(path, imageFile, { contentType: imageFile.type })
+  const { error: uploadError } = await supabase.storage.from('wardrobe-images').upload(path, processedImage, { contentType: processedImage.type })
   if (uploadError) throw new Error('Could not upload wardrobe image')
   const { data: urlData } = supabase.storage.from('wardrobe-images').getPublicUrl(path)
   const { data: itemId, error: itemError } = await supabase.rpc('create_draft_wardrobe_item', {

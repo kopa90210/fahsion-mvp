@@ -59,6 +59,12 @@ vi.mock('@/src/lib/supabase/server', () => ({
   createClient: vi.fn().mockResolvedValue(mockSupabase),
 }))
 
+vi.mock('@/src/lib/background-removal/service', () => ({
+  removeImageBackground: vi.fn().mockResolvedValue(
+    new File(['processed'], 'processed.png', { type: 'image/png' }),
+  ),
+}))
+
 // ---------------------------------------------------------------------------
 // Import functions under test
 // ---------------------------------------------------------------------------
